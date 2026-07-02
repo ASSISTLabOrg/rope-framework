@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "kind": "ensemble_fusion_decoder",
+  "runtime_requirements": {
+    "onnxruntime": "1.25",
+    "libtorch": "2.7"
+  },
+  "latent_dim": 10,
+  "driver_columns": [
+    "f10",
+    "kp",
+    "t1",
+    "t2",
+    "t3",
+    "t4"
+  ],
+  "driver_source": "celestrak_sw",
+  "ic_grid_axes": [
+    "f10",
+    "kp"
+  ],
+  "ensemble_fusion_decoder": {
+    "seq_len": 3,
+    "decode_batch_size": 120,
+    "base_models": [
+      {
+        "file": "base_model_00.onnx",
+        "backend": "onnx",
+        "architecture": "lstm",
+        "inter_op_threads": 1
+      },
+      {
+        "file": "base_model_01.onnx",
+        "backend": "onnx",
+        "architecture": "lstm",
+        "inter_op_threads": 1
+      },
+      {
+        "file": "base_model_02.onnx",
+        "backend": "onnx",
+        "architecture": "lstm",
+        "inter_op_threads": 1
+      }
+    ],
+    "meta_model": {
+      "file": "meta_model.onnx",
+      "backend": "onnx"
+    },
+    "decoders": [
+      {
+        "backends": {
+          "onnx": "coae_decoder.onnx",
+          "libtorch": "coae_decoder.pt"
+        },
+        "stats": "stats_cae.bin",
+        "alt_start": 0,
+        "alt_end": 45
+      }
+    ]
+  }
+}

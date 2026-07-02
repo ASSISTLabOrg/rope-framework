@@ -17,6 +17,19 @@ ICTable ICTable::from_file(const std::filesystem::path& path) {
 }
 
 // ---------------------------------------------------------------------------
+// load_from_dir() — probe for binary then CSV
+// ---------------------------------------------------------------------------
+ICTable ICTable::load_from_dir(const std::filesystem::path& dir) {
+    auto bin = dir / "ic_table.icbin";
+    auto csv = dir / "ic_table.csv";
+    if (std::filesystem::exists(bin)) return IcBin::load(bin);
+    if (std::filesystem::exists(csv)) return ICTable{csv};
+    throw std::runtime_error(
+        "ICTable: no IC table found in " + dir.string() +
+        " (expected ic_table.icbin or ic_table.csv)");
+}
+
+// ---------------------------------------------------------------------------
 // Private constructor (used by IcBin::load)
 // ---------------------------------------------------------------------------
 ICTable::ICTable(int k,

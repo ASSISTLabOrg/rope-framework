@@ -9,8 +9,10 @@
 #include "rope/core/types.h"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace rope::forecast {
 
@@ -50,6 +52,10 @@ struct Config {
 
     // When false, skip the Unscented Transform; uncertainty is set to 0.
     bool compute_uncertainty = true;
+
+    // Progress callback invoked during pipeline load (model names, timing, etc.).
+    // Called on the constructor thread. Default (nullptr): silent.
+    std::function<void(std::string_view)> log;
 };
 
 // ---------------------------------------------------------------------------

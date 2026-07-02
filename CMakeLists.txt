@@ -62,7 +62,15 @@ FetchContent_Declare(
     URL_HASH SHA256=f2d893a65c3b1324c50d4e682c0cdc021dd0477ae2c048544f39eed6654b699a
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
-FetchContent_MakeAvailable(nlohmann_json CLI11)
+FetchContent_Declare(
+    rope_registry
+    URL      https://github.com/AssistLabOrg/rope-registry/archive/refs/tags/v2.tar.gz
+    URL_HASH SHA256=55a7c2f4eb4548d7f21ef371baa4df5f5620c0e90cdecc89c4da8567531fe4bc
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json CLI11 rope_registry)
+
+include(cmake/RopeHelpers.cmake)
 
 # ---------------------------------------------------------------------------
 # ONNX Runtime + LibTorch — acquired via cmake/Dependencies.cmake.
@@ -152,11 +160,10 @@ add_library(rope_io STATIC
     src/io/config_reader.cpp
     src/io/driver_db.cpp
     src/io/driver_bin.cpp
-    src/io/driver_config.cpp
     src/io/driver_cache.cpp
     src/io/ic_table.cpp
     src/io/ic_bin.cpp
-    src/io/ic_config.cpp
+    src/io/model_manifest.cpp
 )
 target_link_libraries(rope_io
     PUBLIC  rope_core
@@ -179,6 +186,7 @@ add_library(rope_client STATIC
 )
 target_include_directories(rope_client
     PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/client>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
 )
 target_link_libraries(rope_client
     PUBLIC  rope_core
@@ -191,6 +199,11 @@ target_link_libraries(rope_client
 if(ORT_INC AND ORT_LIB)
     add_library(rope_forecast STATIC
         src/forecast/pipeline.cpp
+        src/forecast/pipeline_registry.cpp
+        src/forecast/ensemble_fusion_decoder_pipeline.cpp
+        src/forecast/runtime_compat.cpp
+        src/forecast/model_factory.cpp
+        src/forecast/unscented_transform.cpp
     )
     target_include_directories(rope_forecast
         PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -224,6 +237,7 @@ add_library(rope_server STATIC
 )
 target_include_directories(rope_server
     PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/server>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
 )
 target_link_libraries(rope_server
     PUBLIC  rope_core
@@ -277,6 +291,7 @@ target_link_libraries(rope_exe
 if(TARGET rope_forecast)
     target_link_libraries(rope_exe PRIVATE rope_forecast)
 endif()
+rope_set_runtime_rpath(rope_exe)
 # Search both the standard tarball layout (bin/ + ../lib/) and a flat layout
 # (everything in one directory, as used by the NuGet contentFiles package).
 if(APPLE)
@@ -284,50 +299,7 @@ if(APPLE)
 else()
     set(_exe_install_rpath "$ORIGIN;$ORIGIN/../lib")
 endif()
-get_filename_component(ORT_LIB_DIR "${ORT_LIB}" DIRECTORY)
-if(ORT_LIB_DIR)
-    set(_exe_build_rpath "${ORT_LIB_DIR}")
-    if(Torch_FOUND)
-        if(TORCH_INSTALL_PREFIX)
-            set(_exe_torch_lib_dir "${TORCH_INSTALL_PREFIX}/lib")
-        else()
-            list(GET TORCH_LIBRARIES 0 _exe_first_torch)
-            get_filename_component(_exe_torch_lib_dir "${_exe_first_torch}" DIRECTORY)
-        endif()
-        list(APPEND _exe_build_rpath "${_exe_torch_lib_dir}")
-    endif()
-    set_target_properties(rope_exe PROPERTIES
-        BUILD_RPATH  "${_exe_build_rpath}"
-        INSTALL_RPATH "${_exe_install_rpath}"
-    )
-
-    # On Windows there is no RPATH; copy ORT (and LibTorch) DLLs next to
-    # rope.exe so the server subprocess finds them when spawned by the CLI.
-    if(WIN32)
-        file(GLOB _exe_ort_dlls "${ORT_LIB_DIR}/*.dll")
-        foreach(_dll ${_exe_ort_dlls})
-            add_custom_command(TARGET rope_exe POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${_dll}" "$<TARGET_FILE_DIR:rope_exe>"
-                VERBATIM
-            )
-        endforeach()
-        if(Torch_FOUND AND DEFINED _exe_torch_lib_dir)
-            file(GLOB _exe_torch_dlls "${_exe_torch_lib_dir}/*.dll")
-            foreach(_dll ${_exe_torch_dlls})
-                add_custom_command(TARGET rope_exe POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                            "${_dll}" "$<TARGET_FILE_DIR:rope_exe>"
-                    VERBATIM
-                )
-            endforeach()
-        endif()
-    endif()
-else()
-    set_target_properties(rope_exe PROPERTIES
-        INSTALL_RPATH "${_exe_install_rpath}"
-    )
-endif()
+set_target_properties(rope_exe PROPERTIES INSTALL_RPATH "${_exe_install_rpath}")
 
 # ---------------------------------------------------------------------------
 # Install rules

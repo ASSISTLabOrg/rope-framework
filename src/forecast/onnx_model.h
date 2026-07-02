@@ -116,14 +116,13 @@ public:
         return std::vector<float>(ptr, ptr + n);
     }
 
-    // IoBinding path — zero-copy, reuses caller-supplied buffers.
-    // Used by DynamicRollout for the hot loop (fixed input/output sizes).
-    void infer_bound(
+    // Zero-copy IoBinding path — overrides IModel::try_infer_into().
+    bool try_infer_into(
         float*                      input_buf,
         const std::vector<int64_t>& input_shape,
         float*                      output_buf,
         const std::vector<int64_t>& output_shape
-    ) {
+    ) override {
         if (!binding_)
             binding_ = std::make_unique<Ort::IoBinding>(*session_);
 
@@ -139,6 +138,7 @@ public:
         binding_->BindInput(input_names_[0], in_val);
         binding_->BindOutput(output_names_[0], out_val);
         session_->Run(Ort::RunOptions{nullptr}, *binding_);
+        return true;
     }
 
     const std::string& name() const override { return name_; }

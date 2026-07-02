@@ -1,7 +1,7 @@
 #pragma once
 // libtorch_model.h — TorchScript backend for the forecast pipeline.
 //
-// Include only in model_factory.h (single inclusion point for heavy headers).
+// Include only in model_factory.cpp (single inclusion point for heavy headers).
 // Device strings follow PyTorch conventions: "cpu", "cuda", "cuda:0", etc.
 
 #include <stdexcept>
