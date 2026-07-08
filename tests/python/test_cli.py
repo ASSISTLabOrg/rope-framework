@@ -108,6 +108,68 @@ def test_forecast_returns_ok(server):
     assert "window_end"   in data
 
 
+def test_rope_binding_forecast_uses_custom_socket_path(tmp_path):
+    """Regression test: Rope.forecast() must pass --socket when a custom
+    socket_path is configured -- otherwise it silently falls back to the
+    default per-user socket, which can talk to a stale/unrelated server
+    (see python/rope.py's forecast(), which previously omitted --socket
+    unlike .open()/.shutdown()).
+    """
+    sys.path.insert(0, str(_project_root / "python"))
+    from rope import Rope
+
+    lib_path = _project_root / "build" / "librope.so"
+    assert lib_path.is_file(), "librope.so not built"
+
+    conf = tmp_path / "rope_binding.conf"
+    _write_conf(conf)
+    custom_socket = str(tmp_path / "custom.sock")
+
+    r = Rope(lib_path=lib_path, exe_path=Path(ROPE_EXE), socket_path=custom_socket, config_path=conf)
+    result = r.forecast(FORECAST_START, FORECAST_HORIZON)
+    assert result["status"] == "ok"
+
+    # The server must actually be listening on the custom socket (not the
+    # default per-user one) -- talking to it directly via the CLI proves it.
+    probe = _rope(
+        "--socket", custom_socket, "get", "--mode", "interp",
+        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
+    )
+    assert probe.returncode == 0
+
+    _rope("--socket", custom_socket, "exit", timeout=10)
+
+
+def test_rope_binding_shutdown_is_idempotent(tmp_path):
+    """Regression test: Rope.shutdown() must be safe to call more than once.
+
+    A caller that explicitly shuts down and then lets the process exit
+    normally hits this twice (once explicitly, once via the atexit hook
+    registered in Rope.__init__). Before the idempotency guard, the second
+    call's connect() could still succeed while the server was mid-exit, but
+    nothing ever serviced it -- the underlying IPC client has no receive
+    timeout, so the second call hung forever instead of failing fast or
+    returning. This test would hang (not fail) if the regression came back.
+    """
+    sys.path.insert(0, str(_project_root / "python"))
+    from rope import Rope
+
+    lib_path = _project_root / "build" / "librope.so"
+    assert lib_path.is_file(), "librope.so not built"
+
+    conf = tmp_path / "rope_shutdown.conf"
+    _write_conf(conf)
+    custom_socket = str(tmp_path / "shutdown.sock")
+
+    r = Rope(lib_path=lib_path, exe_path=Path(ROPE_EXE), socket_path=custom_socket, config_path=conf)
+    r.forecast(FORECAST_START, FORECAST_HORIZON)
+
+    start = time.monotonic()
+    r.shutdown()
+    r.shutdown()  # must return immediately, not hang
+    assert time.monotonic() - start < 5.0
+
+
 # ---------------------------------------------------------------------------
 # get — single point
 # ---------------------------------------------------------------------------

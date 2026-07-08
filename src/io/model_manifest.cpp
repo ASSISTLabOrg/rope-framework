@@ -90,20 +90,29 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
         throw std::runtime_error(
             "ModelManifest::load: 'driver_source' must not be empty in " + ps);
 
-    // ic_grid_axes
-    if (!j.contains("ic_grid_axes") || !j["ic_grid_axes"].is_array())
-        throw std::runtime_error(missing_field("ic_grid_axes", ps));
-    m.ic_grid_axes = j["ic_grid_axes"].get<std::vector<std::string>>();
-    if (m.ic_grid_axes.empty())
-        throw std::runtime_error(
-            "ModelManifest::load: 'ic_grid_axes' must not be empty in " + ps);
-
     // Kind-specific block
     if (!j.contains("ensemble_fusion_decoder") || !j["ensemble_fusion_decoder"].is_object())
         throw std::runtime_error(missing_field("ensemble_fusion_decoder", ps));
 
     const auto& jk = j["ensemble_fusion_decoder"];
     EnsembleFusionDecoderSpec spec;
+
+    // ic_grid_axes — sourced from the nested ic block (rope-registry shape:
+    // ensemble_fusion_decoder.ic = {kind, params: {grid_axes, file}}), not a
+    // top-level field. No fallback to a legacy top-level field: missing the
+    // nested block is a hard failure.
+    if (!jk.contains("ic") || !jk["ic"].is_object())
+        throw std::runtime_error(missing_field("ensemble_fusion_decoder.ic", ps));
+    const auto& jic = jk["ic"];
+    if (!jic.contains("params") || !jic["params"].is_object())
+        throw std::runtime_error(missing_field("ensemble_fusion_decoder.ic.params", ps));
+    const auto& jic_params = jic["params"];
+    if (!jic_params.contains("grid_axes") || !jic_params["grid_axes"].is_array())
+        throw std::runtime_error(missing_field("ensemble_fusion_decoder.ic.params.grid_axes", ps));
+    m.ic_grid_axes = jic_params["grid_axes"].get<std::vector<std::string>>();
+    if (m.ic_grid_axes.empty())
+        throw std::runtime_error(
+            "ModelManifest::load: 'ic_grid_axes' must not be empty in " + ps);
 
     if (!jk.contains("seq_len") || !jk["seq_len"].is_number_integer())
         throw std::runtime_error(missing_field("ensemble_fusion_decoder.seq_len", ps));

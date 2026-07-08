@@ -301,13 +301,17 @@ if IS_CUSTOM:
         "latent_dim": K,
         "driver_columns": ["f10", "kp", "t1", "t2", "t3", "t4"],
         "driver_source": "celestrak_sw",
-        "ic_grid_axes": ["f10", "kp"],
+        "validated": False,
         "ensemble_fusion_decoder": {
             "seq_len": S,
             "decode_batch_size": 120,
             "base_models": base_models,
             "meta_model": {"file": "meta_model.onnx", "backend": "onnx"},
             "decoders": decoders,
+            "ic": {
+                "kind": "ic_lookup_table",
+                "params": {"grid_axes": ["f10", "kp"], "file": "ic_table.icbin"},
+            },
         },
     }
     print("Writing model_manifest.json …")

@@ -48,6 +48,10 @@ struct ModelManifest {
     int                      latent_dim = 0;
     std::vector<std::string> driver_columns;
     std::string              driver_source;
+
+    // Parsed from the nested manifest[kind].ic.params.grid_axes block
+    // (rope-registry shape: ic = {kind, params: {grid_axes, file}}), not a
+    // top-level manifest field.
     std::vector<std::string> ic_grid_axes;
 
     // Present iff kind == "ensemble_fusion_decoder".

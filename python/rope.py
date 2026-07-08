@@ -114,6 +114,7 @@ class Rope:
         self._exe_path    = Path(exe_path) if exe_path else None
         self._socket_path = socket_path
         self._handle: "int | None" = None
+        self._shutdown_sent = False
         self._lib         = self._load_lib()
 
         # Pre-allocated buffers for get_density() — avoids per-call allocation.
@@ -173,7 +174,19 @@ class Rope:
         self.open()
 
     def shutdown(self):
-        """Send the exit command to the server, stopping it."""
+        """Send the exit command to the server, stopping it.
+
+        Idempotent: a second call is a no-op. Without this guard, a caller
+        that explicitly shuts down and then lets the process exit normally
+        hits this twice (once explicitly, once via the atexit hook
+        registered in __init__) -- the second call's connect() can still
+        succeed while the server is mid-exit, but nothing ever services it,
+        and the underlying IPC client has no receive timeout, so the second
+        call hangs forever rather than failing fast.
+        """
+        if self._shutdown_sent:
+            return
+        self._shutdown_sent = True
         err  = ctypes.create_string_buffer(256)
         sock = self._socket_path.encode() if self._socket_path else None
         self._lib.rope_server_stop(sock, err, len(err))
@@ -202,7 +215,11 @@ class Rope:
                 start = start.replace(tzinfo=timezone.utc)
             start = start.strftime("%Y-%m-%d %H:%M:%S")
 
-        cmd = [str(self._exe_path), "forecast", "--start", start, "--horizon", str(horizon)]
+        # --socket is a global option and must precede the subcommand name.
+        cmd = [str(self._exe_path)]
+        if self._socket_path:
+            cmd += ["--socket", self._socket_path]
+        cmd += ["forecast", "--start", start, "--horizon", str(horizon)]
         if self._config_path:
             cmd += ["--config", str(self._config_path)]
 

@@ -14,10 +14,7 @@
     "t4"
   ],
   "driver_source": "celestrak_sw",
-  "ic_grid_axes": [
-    "f10",
-    "kp"
-  ],
+  "validated": false,
   "ensemble_fusion_decoder": {
     "seq_len": 3,
     "decode_batch_size": 120,
@@ -62,6 +59,13 @@
         "alt_start": 22,
         "alt_end": 45
       }
-    ]
+    ],
+    "ic": {
+      "kind": "ic_lookup_table",
+      "params": {
+        "grid_axes": ["f10", "kp"],
+        "file": "ic_table.csv"
+      }
+    }
   }
 }
