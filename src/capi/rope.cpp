@@ -14,6 +14,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 
 // ---------------------------------------------------------------------------
 // Opaque handle
@@ -42,13 +43,9 @@ void fill_err(char* err_buf, int err_len, const char* msg) noexcept {
 
 int classify_exception(const std::exception* e) noexcept {
     if (!e) return ROPE_ERR_INTERNAL;
-    std::string w = e->what();
-    // Map well-known exception types by message prefix
-    if (w.find("Requested time") != std::string::npos)    return ROPE_ERR_TIME_RANGE;
-    if (w.find("Requested latitude") != std::string::npos) return ROPE_ERR_SPATIAL_RANGE;
-    if (w.find("Requested altitude") != std::string::npos) return ROPE_ERR_SPATIAL_RANGE;
-    if (w.find("no_forecast") != std::string::npos)        return ROPE_ERR_NO_FORECAST;
-    if (w.find("connect") != std::string::npos)            return ROPE_ERR_NO_SERVER;
+    std::string_view w = e->what();
+    if (w.find("no_forecast") != std::string_view::npos) return ROPE_ERR_NO_FORECAST;
+    if (w.find("connect")     != std::string_view::npos) return ROPE_ERR_NO_SERVER;
     return ROPE_ERR_INTERNAL;
 }
 
@@ -99,6 +96,12 @@ int rope_query(rope_interp_t* interp,
         *density     = r.density;
         *uncertainty = r.uncertainty;
         return ROPE_OK;
+    } catch (const rope::interpolate::TimeOutOfRangeError& e) {
+        fill_err(err_buf, err_len, e.what());
+        return ROPE_ERR_TIME_RANGE;
+    } catch (const rope::interpolate::SpatialOutOfRangeError& e) {
+        fill_err(err_buf, err_len, e.what());
+        return ROPE_ERR_SPATIAL_RANGE;
     } catch (const std::exception& e) {
         fill_err(err_buf, err_len, e.what());
         return classify_exception(&e);
@@ -138,6 +141,12 @@ int rope_query_batch(rope_interp_t* interp,
             uncertainty[i] = r.uncertainty;
         }
         return ROPE_OK;
+    } catch (const rope::interpolate::TimeOutOfRangeError& e) {
+        fill_err(err_buf, err_len, e.what());
+        return ROPE_ERR_TIME_RANGE;
+    } catch (const rope::interpolate::SpatialOutOfRangeError& e) {
+        fill_err(err_buf, err_len, e.what());
+        return ROPE_ERR_SPATIAL_RANGE;
     } catch (const std::exception& e) {
         fill_err(err_buf, err_len, e.what());
         return classify_exception(&e);

@@ -1,36 +1,27 @@
 #pragma once
-// dynamic_rollout.h — auto-regressive rollout for one base model.
-//
-// run() is stateless; multiple threads may call it with different models and
-// non-overlapping output buffers concurrently.
-
 #include <algorithm>
 #include <cassert>
 #include <vector>
 
-#include "model_interface.h"
-#include "onnx_model.h"
+#include "rollout_strategy.h"
 
 namespace rope::forecast {
 
-class DynamicRollout {
+// Sliding-window auto-regressive rollout.
+// Identical stepping logic to the former DynamicRollout, but backend-agnostic:
+// uses IModel::infer_into() (zero-copy IoBinding when supported) and falls back
+// to IModel::infer() for backends that return false from infer_into().
+class SlidingWindowRollout : public IRolloutStrategy {
 public:
     // K = latent_dim, S = seq_len, D = total_dim
-    DynamicRollout(int K, int S, int D) : K_(K), S_(S), D_(D) {}
+    SlidingWindowRollout(int K, int S, int D) : K_(K), S_(S), D_(D) {}
 
-    // Run rollout for a single model.
-    //   model     — base temporal model
-    //   x_chunk   — (H+1, S, D) flat float array (read-only)
-    //   H         — forecast horizon
-    //   preds_out — (H, K) flat float array (caller allocates)
-    //
-    // Input shape per call: (1, S, D).  Output shape expected: (1, K).
     void run(
         IModel&      model,
         const float* x_chunk,   // (H+1, S, D)
         int          H,
         float*       preds_out  // (H, K)
-    ) const {
+    ) const override {
         const int window_size = S_ * D_;
         std::vector<float> inp(window_size);
         std::copy(x_chunk, x_chunk + window_size, inp.begin());
@@ -40,13 +31,8 @@ public:
         const std::vector<int64_t> in_shape  = {1, S_, D_};
         const std::vector<int64_t> out_shape = {1, K_};
 
-        OnnxModel* onnx = dynamic_cast<OnnxModel*>(&model);
-
         for (int t = 1; t <= H; ++t) {
-            if (onnx) {
-                onnx->infer_bound(inp.data(), in_shape,
-                                  out_buf.data(), out_shape);
-            } else {
+            if (!model.try_infer_into(inp.data(), in_shape, out_buf.data(), out_shape)) {
                 std::vector<int64_t> dummy_shape;
                 std::vector<float> p = model.infer(inp, in_shape, dummy_shape);
                 assert(static_cast<int>(p.size()) >= K_);

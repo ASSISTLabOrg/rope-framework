@@ -1,11 +1,11 @@
 #include "rope/client/client.h"
-#include "base64.h"
+#include "core/base64.h"
+#include "core/wire.h"
 
 #include "rope/core/datetime.h"
 
 #include <nlohmann/json.hpp>
 
-#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -22,38 +22,9 @@ namespace rope::client {
 struct IpcClient::Impl {
     std::unique_ptr<platform::IpcSocket> sock;
 
-    // Send a length-prefixed JSON message.
-    void send_msg(const json& j) {
-        std::string s = j.dump();
-        auto len = static_cast<std::uint32_t>(s.size());
-        // 32-bit little-endian length prefix
-        std::uint8_t hdr[4];
-        hdr[0] = static_cast<std::uint8_t>(len);
-        hdr[1] = static_cast<std::uint8_t>(len >> 8);
-        hdr[2] = static_cast<std::uint8_t>(len >> 16);
-        hdr[3] = static_cast<std::uint8_t>(len >> 24);
-        sock->send_all(hdr, 4);
-        sock->send_all(s.data(), s.size());
-    }
-
-    // Receive a length-prefixed JSON message.
-    json recv_msg() {
-        std::uint8_t hdr[4];
-        sock->recv_all(hdr, 4);
-        std::uint32_t len = static_cast<std::uint32_t>(hdr[0])
-                          | static_cast<std::uint32_t>(hdr[1]) << 8
-                          | static_cast<std::uint32_t>(hdr[2]) << 16
-                          | static_cast<std::uint32_t>(hdr[3]) << 24;
-        std::string buf(len, '\0');
-        sock->recv_all(buf.data(), len);
-        return json::parse(buf);
-    }
-
-    // Send a request and return the parsed response.
-    // Throws a std::runtime_error if status != "ok".
     json call(const json& req) {
-        send_msg(req);
-        json resp = recv_msg();
+        wire::send_msg(*sock, req);
+        json resp = wire::recv_msg(*sock);
         if (resp.value("status", "") != "ok") {
             std::string msg = resp.value("message", "(no message)");
             throw std::runtime_error("server error: " + msg);
@@ -128,7 +99,7 @@ ForecastGrid IpcClient::fetch_grid() {
 
     // Decode base64 blobs into float32 arrays
     auto decode_field = [&](const std::string& key) -> std::vector<float> {
-        auto bytes = detail::base64_decode(resp.at(key).get<std::string>());
+        auto bytes = rope::detail::base64_decode(resp.at(key).get<std::string>());
         std::size_t n_floats = bytes.size() / sizeof(float);
         std::vector<float> out(n_floats);
         std::memcpy(out.data(), bytes.data(), n_floats * sizeof(float));

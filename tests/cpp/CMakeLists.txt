@@ -11,13 +11,13 @@ FetchContent_MakeAvailable(Catch2)
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 
-set(ROPE_FIXTURE_DIR      "${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
-set(ROPE_FIXTURE_MODELS   "${ROPE_FIXTURE_DIR}/test_models")
-set(ROPE_CPP_FIXTURE_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+set(ROPE_FIXTURE_DIR        "${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+set(ROPE_FIXTURE_MODELS     "${ROPE_FIXTURE_DIR}/test_models")
+set(ROPE_FIXTURE_MODELS_M3  "${ROPE_FIXTURE_DIR}/test_models_m3")
+set(ROPE_FIXTURE_MODELS_SPLIT "${ROPE_FIXTURE_DIR}/test_models_split")
+set(ROPE_CPP_FIXTURE_DIR    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+set(ROPE_REGISTRY_DIR       "${rope_registry_SOURCE_DIR}")
 
-# ---------------------------------------------------------------------------
-# Category A — pure-logic tests (no ONNX Runtime required)
-# ---------------------------------------------------------------------------
 add_executable(rope_tests
     test_interpolator.cpp
     test_csv_reader.cpp
@@ -27,26 +27,32 @@ add_executable(rope_tests
     test_ic_table.cpp
     test_driver_db.cpp
     test_driver_cache.cpp
+    test_model_manifest.cpp
+    test_grid_stitch.cpp
+    test_kind_registry.cpp
 )
 target_link_libraries(rope_tests
     PRIVATE Catch2::Catch2WithMain
             rope_interpolate
             rope_io
             rope_core
+            nlohmann_json::nlohmann_json
+)
+target_include_directories(rope_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../src/forecast"
 )
 target_compile_definitions(rope_tests PRIVATE
     ROPE_FIXTURE_DIR="${ROPE_FIXTURE_DIR}"
     ROPE_FIXTURE_MODELS="${ROPE_FIXTURE_MODELS}"
     ROPE_CPP_FIXTURE_DIR="${ROPE_CPP_FIXTURE_DIR}"
+    ROPE_REGISTRY_DIR="${ROPE_REGISTRY_DIR}"
 )
 catch_discover_tests(rope_tests)
 
-# ---------------------------------------------------------------------------
-# Category B — pipeline integration test (requires ONNX Runtime)
-# ---------------------------------------------------------------------------
 if(TARGET rope_forecast)
     add_executable(rope_pipeline_tests
         test_pipeline.cpp
+        test_manifest_failures.cpp
     )
     target_link_libraries(rope_pipeline_tests
         PRIVATE Catch2::Catch2WithMain
@@ -57,54 +63,12 @@ if(TARGET rope_forecast)
     target_compile_definitions(rope_pipeline_tests PRIVATE
         ROPE_FIXTURE_DIR="${ROPE_FIXTURE_DIR}"
         ROPE_FIXTURE_MODELS="${ROPE_FIXTURE_MODELS}"
+        ROPE_FIXTURE_MODELS_M3="${ROPE_FIXTURE_MODELS_M3}"
+        ROPE_FIXTURE_MODELS_SPLIT="${ROPE_FIXTURE_MODELS_SPLIT}"
+        ROPE_CPP_FIXTURE_DIR="${ROPE_CPP_FIXTURE_DIR}"
     )
-    # Point the test binary at the ORT (and LibTorch) runtime libraries so it
-    # can be run in-place by CTest without setting LD_LIBRARY_PATH.
-    if(ORT_LIB)
-        get_filename_component(_ort_rpath "${ORT_LIB}" DIRECTORY)
-        set(_test_rpath "${_ort_rpath}")
-        if(Torch_FOUND)
-            if(TORCH_INSTALL_PREFIX)
-                set(_torch_dir "${TORCH_INSTALL_PREFIX}/lib")
-            else()
-                list(GET TORCH_LIBRARIES 0 _first_torch)
-                get_filename_component(_torch_dir "${_first_torch}" DIRECTORY)
-            endif()
-            list(APPEND _test_rpath "${_torch_dir}")
-        endif()
-        set_target_properties(rope_pipeline_tests PROPERTIES
-            BUILD_RPATH "${_test_rpath}"
-        )
+    rope_set_runtime_rpath(rope_pipeline_tests)
 
-        # On Windows there is no RPATH; copy ORT (and LibTorch) DLLs into the
-        # binary output directory so the test executable finds them on startup.
-        if(WIN32)
-            file(GLOB _test_ort_dlls "${_ort_rpath}/*.dll")
-            foreach(_dll ${_test_ort_dlls})
-                add_custom_command(TARGET rope_pipeline_tests POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                            "${_dll}" "$<TARGET_FILE_DIR:rope_pipeline_tests>"
-                    VERBATIM
-                )
-            endforeach()
-            if(Torch_FOUND)
-                file(GLOB _test_torch_dlls "${_torch_dir}/*.dll")
-                foreach(_dll ${_test_torch_dlls})
-                    add_custom_command(TARGET rope_pipeline_tests POST_BUILD
-                        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                                "${_dll}" "$<TARGET_FILE_DIR:rope_pipeline_tests>"
-                        VERBATIM
-                    )
-                endforeach()
-            endif()
-        endif()
-    endif()
-
-    # When LibTorch is linked, generate the .pt fixture at test time using the
-    # exact LibTorch version in the build (guaranteeing compatibility).
-    # Pass FIXTURES_REQUIRED via catch_discover_tests PROPERTIES so it is
-    # applied to each individual test case (catch_discover_tests does not
-    # register the target name itself as a CTest test).
     if(Torch_FOUND)
         add_executable(gen_decoder_pt ../gen_decoder_pt.cpp)
         target_link_libraries(gen_decoder_pt PRIVATE ${TORCH_LIBRARIES})
@@ -128,9 +92,6 @@ if(TARGET rope_forecast)
     endif()
 endif()
 
-# ---------------------------------------------------------------------------
-# Category C — CLI integration tests (requires ONNX Runtime + Python + pytest)
-# ---------------------------------------------------------------------------
 if(TARGET rope_forecast)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_FOUND)

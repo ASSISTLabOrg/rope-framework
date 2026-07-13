@@ -13,7 +13,8 @@
 #include "rope/core/types.h"
 #include "rope/interpolate/grid_interpolator.h"
 #include "rope/io/config_reader.h"
-#include "base64_enc.h"
+#include "core/base64.h"
+#include "core/wire.h"
 
 #ifdef ROPE_HAS_FORECAST
 #  include "rope/forecast/pipeline.h"
@@ -43,34 +44,6 @@ namespace rope::server {
 static std::atomic<bool> g_running{false};
 
 static void on_signal(int) noexcept { g_running = false; }
-
-// ---------------------------------------------------------------------------
-// Wire framing — 32-bit little-endian length prefix.
-// ---------------------------------------------------------------------------
-static void send_msg(platform::IpcSocket& sock, const json& j) {
-    std::string s = j.dump();
-    auto len = static_cast<std::uint32_t>(s.size());
-    std::uint8_t hdr[4] = {
-        static_cast<std::uint8_t>(len),
-        static_cast<std::uint8_t>(len >>  8),
-        static_cast<std::uint8_t>(len >> 16),
-        static_cast<std::uint8_t>(len >> 24),
-    };
-    sock.send_all(hdr, 4);
-    sock.send_all(s.data(), s.size());
-}
-
-static json recv_msg(platform::IpcSocket& sock) {
-    std::uint8_t hdr[4];
-    sock.recv_all(hdr, 4);
-    std::uint32_t len = static_cast<std::uint32_t>(hdr[0])
-                      | static_cast<std::uint32_t>(hdr[1]) << 8
-                      | static_cast<std::uint32_t>(hdr[2]) << 16
-                      | static_cast<std::uint32_t>(hdr[3]) << 24;
-    std::string buf(len, '\0');
-    sock.recv_all(buf.data(), len);
-    return json::parse(buf);
-}
 
 static json error_resp(const std::string& code, const std::string& msg) {
     return {{"status", "error"}, {"code", code}, {"message", msg}};
@@ -112,7 +85,7 @@ struct ServerState {
 static bool handle_request(platform::IpcSocket& sock,
                             ServerState&         state,
                             bool&                exit_requested) {
-    json req  = recv_msg(sock);
+    json req  = wire::recv_msg(sock);
     auto type = req.value("type", "");
 
     try {
@@ -121,12 +94,12 @@ static bool handle_request(platform::IpcSocket& sock,
         // ----------------------------------------------------------------
         if (type == "forecast") {
 #ifndef ROPE_HAS_FORECAST
-            send_msg(sock, error_resp("no_forecast",
+            wire::send_msg(sock,error_resp("no_forecast",
                 "ROPE was built without ONNX Runtime; forecast is unavailable"));
             return true;
 #else
             if (!state.pipeline) {
-                send_msg(sock, error_resp("no_forecast",
+                wire::send_msg(sock,error_resp("no_forecast",
                     "forecast pipeline failed to load at startup; "
                     "check server logs"));
                 return true;
@@ -142,7 +115,7 @@ static bool handle_request(platform::IpcSocket& sock,
 
             state.cache.set(std::move(grid));
 
-            send_msg(sock, {
+            wire::send_msg(sock,{
                 {"status",       "ok"},
                 {"window_start", ws},
                 {"window_end",   we}
@@ -169,7 +142,7 @@ static bool handle_request(platform::IpcSocket& sock,
                 ? state.cache.interp->query_hold(tp, lst, lat, alt)
                 : state.cache.interp->query_interp(tp, lst, lat, alt);
 
-            send_msg(sock, {
+            wire::send_msg(sock,{
                 {"status",      "ok"},
                 {"density",     r.density},
                 {"uncertainty", r.uncertainty}
@@ -205,7 +178,7 @@ static bool handle_request(platform::IpcSocket& sock,
                 });
             }
 
-            send_msg(sock, {{"status", "ok"}, {"results", std::move(results)}});
+            wire::send_msg(sock,{{"status", "ok"}, {"results", std::move(results)}});
             return true;
         }
 
@@ -223,14 +196,14 @@ static bool handle_request(platform::IpcSocket& sock,
             for (auto t : g.times)
                 datetimes.push_back(format_iso(t));
 
-            send_msg(sock, {
+            wire::send_msg(sock,{
                 {"status",       "ok"},
                 {"H",            g.H},
                 {"window_start", format_iso(g.times.front())},
                 {"window_end",   format_iso(g.times.back())},
                 {"datetimes",    std::move(datetimes)},
-                {"density",      detail::base64_encode(g.density)},
-                {"uncertainty",  detail::base64_encode(g.uncertainty)}
+                {"density",      rope::detail::base64_encode(g.density)},
+                {"uncertainty",  rope::detail::base64_encode(g.uncertainty)}
             });
             return true;
         }
@@ -239,22 +212,23 @@ static bool handle_request(platform::IpcSocket& sock,
         // exit — clean shutdown.
         // ----------------------------------------------------------------
         if (type == "exit") {
-            send_msg(sock, {{"status", "ok"}});
+            wire::send_msg(sock,{{"status", "ok"}});
             exit_requested = true;
+            g_running = false;  // wake the idle-timeout watcher so run() doesn't block in watcher.join()
             return false;
         }
 
-        send_msg(sock, error_resp("bad_request", "unknown type: " + type));
+        wire::send_msg(sock,error_resp("bad_request", "unknown type: " + type));
         return true;
 
     } catch (const interpolate::TimeOutOfRangeError& e) {
-        send_msg(sock, error_resp("time_out_of_range", e.what()));
+        wire::send_msg(sock,error_resp("time_out_of_range", e.what()));
         return true;
     } catch (const interpolate::SpatialOutOfRangeError& e) {
-        send_msg(sock, error_resp("spatial_out_of_range", e.what()));
+        wire::send_msg(sock,error_resp("spatial_out_of_range", e.what()));
         return true;
     } catch (const std::exception& e) {
-        send_msg(sock, error_resp("internal", e.what()));
+        wire::send_msg(sock,error_resp("internal", e.what()));
         return true;
     }
 }
