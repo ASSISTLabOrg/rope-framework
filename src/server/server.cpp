@@ -214,6 +214,7 @@ static bool handle_request(platform::IpcSocket& sock,
         if (type == "exit") {
             wire::send_msg(sock,{{"status", "ok"}});
             exit_requested = true;
+            g_running = false;  // wake the idle-timeout watcher so run() doesn't block in watcher.join()
             return false;
         }
 
