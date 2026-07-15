@@ -1,4 +1,6 @@
 #pragma once
+#include "rope/core/types.h"
+
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -26,7 +28,7 @@ struct DecoderStageSpec {
     int alt_end   = 0;
 };
 
-struct EnsembleFusionDecoderSpec {
+struct StackedEnsembleSpec {
     int seq_len           = 0;
     int decode_batch_size = 0;
     std::vector<BaseModelSpec>    base_models;
@@ -49,13 +51,17 @@ struct ModelManifest {
     std::vector<std::string> driver_columns;
     std::string              driver_source;
 
+    // Physical shape of this model's output grid. Required — every model
+    // declares the grid it was trained/exported on.
+    GridSpec grid;
+
     // Parsed from the nested manifest[kind].ic.params.grid_axes block
     // (rope-registry shape: ic = {kind, params: {grid_axes, file}}), not a
     // top-level manifest field.
     std::vector<std::string> ic_grid_axes;
 
-    // Present iff kind == "ensemble_fusion_decoder".
-    std::optional<EnsembleFusionDecoderSpec> ensemble_fusion_decoder;
+    // Present iff kind == "stacked_ensemble".
+    std::optional<StackedEnsembleSpec> stacked_ensemble;
 
     // Throws on: missing file, malformed JSON, missing required fields,
     // unsupported schema_version/kind, backend referenced without a matching

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "kind": "ensemble_fusion_decoder",
+  "kind": "stacked_ensemble",
   "runtime_requirements": {
     "onnxruntime": "1.25"
   },
@@ -15,7 +15,12 @@
   ],
   "driver_source": "celestrak_sw",
   "validated": false,
-  "ensemble_fusion_decoder": {
+  "grid": {
+    "n_lst": 72, "n_lat": 36, "n_alt": 45,
+    "lat_min_deg": -87.5, "lat_max_deg": 87.5,
+    "alt_min_km": 100.0, "alt_max_km": 980.0
+  },
+  "stacked_ensemble": {
     "seq_len": 3,
     "decode_batch_size": 120,
     "base_models": [

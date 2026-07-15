@@ -296,13 +296,18 @@ if IS_CUSTOM:
 
     manifest = {
         "schema_version": 1,
-        "kind": "ensemble_fusion_decoder",
+        "kind": "stacked_ensemble",
         "runtime_requirements": runtime_reqs,
         "latent_dim": K,
         "driver_columns": ["f10", "kp", "t1", "t2", "t3", "t4"],
         "driver_source": "celestrak_sw",
         "validated": False,
-        "ensemble_fusion_decoder": {
+        "grid": {
+            "n_lst": GRID_LST, "n_lat": GRID_LAT, "n_alt": GRID_ALT,
+            "lat_min_deg": -87.5, "lat_max_deg": 87.5,
+            "alt_min_km": 100.0, "alt_max_km": 980.0,
+        },
+        "stacked_ensemble": {
             "seq_len": S,
             "decode_batch_size": 120,
             "base_models": base_models,

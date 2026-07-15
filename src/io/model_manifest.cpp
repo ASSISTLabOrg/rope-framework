@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <fstream>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 
 namespace rope::io {
@@ -23,14 +24,17 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
             "ModelManifest::load: no model_manifest.json in " +
             exported_dir.string());
 
-    std::ifstream f(path);
+    std::ifstream f(path, std::ios::binary);
     if (!f)
         throw std::runtime_error(
             "ModelManifest::load: cannot open " + path.string());
+    std::ostringstream raw_stream;
+    raw_stream << f.rdbuf();
+    const std::string raw = raw_stream.str();
 
     nlohmann::json j;
     try {
-        j = nlohmann::json::parse(f);
+        j = nlohmann::json::parse(raw);
     } catch (const nlohmann::json::exception& e) {
         throw std::runtime_error(
             "ModelManifest::load: malformed JSON in " +
@@ -53,7 +57,7 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
     if (!j.contains("kind") || !j["kind"].is_string())
         throw std::runtime_error(missing_field("kind", ps));
     m.kind = j["kind"].get<std::string>();
-    if (m.kind != "ensemble_fusion_decoder")
+    if (m.kind != "stacked_ensemble")
         throw std::runtime_error(
             "ModelManifest::load: unsupported kind '" + m.kind + "' in " + ps);
 
@@ -90,39 +94,70 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
         throw std::runtime_error(
             "ModelManifest::load: 'driver_source' must not be empty in " + ps);
 
-    // Kind-specific block
-    if (!j.contains("ensemble_fusion_decoder") || !j["ensemble_fusion_decoder"].is_object())
-        throw std::runtime_error(missing_field("ensemble_fusion_decoder", ps));
+    // grid — kind-agnostic physical shape of this model's output grid.
+    if (!j.contains("grid") || !j["grid"].is_object())
+        throw std::runtime_error(missing_field("grid", ps));
+    {
+        const auto& jg = j["grid"];
+        for (const char* f : {"n_lst", "n_lat", "n_alt"})
+            if (!jg.contains(f) || !jg[f].is_number_integer())
+                throw std::runtime_error(missing_field((std::string("grid.") + f).c_str(), ps));
+        for (const char* f : {"lat_min_deg", "lat_max_deg", "alt_min_km", "alt_max_km"})
+            if (!jg.contains(f) || !jg[f].is_number())
+                throw std::runtime_error(missing_field((std::string("grid.") + f).c_str(), ps));
 
-    const auto& jk = j["ensemble_fusion_decoder"];
-    EnsembleFusionDecoderSpec spec;
+        m.grid.n_lst       = jg["n_lst"].get<int>();
+        m.grid.n_lat       = jg["n_lat"].get<int>();
+        m.grid.n_alt       = jg["n_alt"].get<int>();
+        m.grid.lat_min_deg = jg["lat_min_deg"].get<double>();
+        m.grid.lat_max_deg = jg["lat_max_deg"].get<double>();
+        m.grid.alt_min_km  = jg["alt_min_km"].get<double>();
+        m.grid.alt_max_km  = jg["alt_max_km"].get<double>();
+
+        if (m.grid.n_lst <= 0 || m.grid.n_lat <= 1 || m.grid.n_alt <= 1)
+            throw std::runtime_error(
+                "ModelManifest::load: 'grid' counts must be positive, with n_lat/n_alt >= 2, in " + ps);
+        if (m.grid.lat_min_deg >= m.grid.lat_max_deg)
+            throw std::runtime_error(
+                "ModelManifest::load: 'grid.lat_min_deg' must be < 'grid.lat_max_deg' in " + ps);
+        if (m.grid.alt_min_km >= m.grid.alt_max_km)
+            throw std::runtime_error(
+                "ModelManifest::load: 'grid.alt_min_km' must be < 'grid.alt_max_km' in " + ps);
+    }
+
+    // Kind-specific block
+    if (!j.contains("stacked_ensemble") || !j["stacked_ensemble"].is_object())
+        throw std::runtime_error(missing_field("stacked_ensemble", ps));
+
+    const auto& jk = j["stacked_ensemble"];
+    StackedEnsembleSpec spec;
 
     // ic_grid_axes — sourced from the nested ic block (rope-registry shape:
-    // ensemble_fusion_decoder.ic = {kind, params: {grid_axes, file}}), not a
+    // stacked_ensemble.ic = {kind, params: {grid_axes, file}}), not a
     // top-level field. No fallback to a legacy top-level field: missing the
     // nested block is a hard failure.
     if (!jk.contains("ic") || !jk["ic"].is_object())
-        throw std::runtime_error(missing_field("ensemble_fusion_decoder.ic", ps));
+        throw std::runtime_error(missing_field("stacked_ensemble.ic", ps));
     const auto& jic = jk["ic"];
     if (!jic.contains("params") || !jic["params"].is_object())
-        throw std::runtime_error(missing_field("ensemble_fusion_decoder.ic.params", ps));
+        throw std::runtime_error(missing_field("stacked_ensemble.ic.params", ps));
     const auto& jic_params = jic["params"];
     if (!jic_params.contains("grid_axes") || !jic_params["grid_axes"].is_array())
-        throw std::runtime_error(missing_field("ensemble_fusion_decoder.ic.params.grid_axes", ps));
+        throw std::runtime_error(missing_field("stacked_ensemble.ic.params.grid_axes", ps));
     m.ic_grid_axes = jic_params["grid_axes"].get<std::vector<std::string>>();
     if (m.ic_grid_axes.empty())
         throw std::runtime_error(
             "ModelManifest::load: 'ic_grid_axes' must not be empty in " + ps);
 
     if (!jk.contains("seq_len") || !jk["seq_len"].is_number_integer())
-        throw std::runtime_error(missing_field("ensemble_fusion_decoder.seq_len", ps));
+        throw std::runtime_error(missing_field("stacked_ensemble.seq_len", ps));
     spec.seq_len = jk["seq_len"].get<int>();
     if (spec.seq_len <= 0)
         throw std::runtime_error(
             "ModelManifest::load: 'seq_len' must be positive in " + ps);
 
     if (!jk.contains("decode_batch_size") || !jk["decode_batch_size"].is_number_integer())
-        throw std::runtime_error(missing_field("ensemble_fusion_decoder.decode_batch_size", ps));
+        throw std::runtime_error(missing_field("stacked_ensemble.decode_batch_size", ps));
     spec.decode_batch_size = jk["decode_batch_size"].get<int>();
     if (spec.decode_batch_size <= 0)
         throw std::runtime_error(
@@ -131,7 +166,7 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
     // base_models
     if (!jk.contains("base_models") || !jk["base_models"].is_array() ||
             jk["base_models"].empty())
-        throw std::runtime_error(missing_field("ensemble_fusion_decoder.base_models", ps));
+        throw std::runtime_error(missing_field("stacked_ensemble.base_models", ps));
     for (const auto& jbm : jk["base_models"]) {
         BaseModelSpec bm;
         if (!jbm.contains("file") || !jbm["file"].is_string())
@@ -149,7 +184,7 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
 
     // meta_model
     if (!jk.contains("meta_model") || !jk["meta_model"].is_object())
-        throw std::runtime_error(missing_field("ensemble_fusion_decoder.meta_model", ps));
+        throw std::runtime_error(missing_field("stacked_ensemble.meta_model", ps));
     {
         const auto& jmm = jk["meta_model"];
         if (!jmm.contains("file") || !jmm["file"].is_string())
@@ -164,7 +199,7 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
 
     // decoders
     if (!jk.contains("decoders") || !jk["decoders"].is_array() || jk["decoders"].empty())
-        throw std::runtime_error(missing_field("ensemble_fusion_decoder.decoders", ps));
+        throw std::runtime_error(missing_field("stacked_ensemble.decoders", ps));
     for (const auto& jd : jk["decoders"]) {
         DecoderStageSpec ds;
         if (!jd.contains("backends") || !jd["backends"].is_object())
@@ -194,7 +229,7 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
         spec.decoders.push_back(std::move(ds));
     }
 
-    // Validate decoder altitude ranges: sort by alt_start, verify exact tiling of [0, GRID_ALT).
+    // Validate decoder altitude ranges: sort by alt_start, verify exact tiling of [0, grid.n_alt).
     std::sort(spec.decoders.begin(), spec.decoders.end(),
         [](const DecoderStageSpec& a, const DecoderStageSpec& b) {
             return a.alt_start < b.alt_start;
@@ -207,19 +242,19 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
             throw std::runtime_error(
                 "ModelManifest::load: decoder altitude ranges have a gap or overlap in " + ps);
     }
-    if (spec.decoders.back().alt_end != rope::GRID_ALT)
+    if (spec.decoders.back().alt_end != m.grid.n_alt)
         throw std::runtime_error(
             "ModelManifest::load: last decoder must have alt_end=" +
-            std::to_string(rope::GRID_ALT) + " in " + ps);
+            std::to_string(m.grid.n_alt) + " in " + ps);
 
-    m.ensemble_fusion_decoder = std::move(spec);
+    m.stacked_ensemble = std::move(spec);
 
     // Cross-check: every backend referenced must have a version in runtime_requirements.
     std::set<std::string> used_backends;
-    for (const auto& bm : m.ensemble_fusion_decoder->base_models)
+    for (const auto& bm : m.stacked_ensemble->base_models)
         used_backends.insert(bm.backend);
-    used_backends.insert(m.ensemble_fusion_decoder->meta_model.backend);
-    for (const auto& ds : m.ensemble_fusion_decoder->decoders)
+    used_backends.insert(m.stacked_ensemble->meta_model.backend);
+    for (const auto& ds : m.stacked_ensemble->decoders)
         for (const auto& [b, _] : ds.backends)
             used_backends.insert(b);
 

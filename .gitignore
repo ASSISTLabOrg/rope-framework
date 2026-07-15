@@ -1,7 +1,10 @@
-build/
+build*/
 data/
 __pycache__
 *.pkl
 *.csv
 .artifacts/
 .pytest_cache
+_CPack_Packages/
+bin/
+obj/

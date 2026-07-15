@@ -7,12 +7,17 @@
 //   ForecastGrid grid = pipe->run("2024-02-09 00:00:00", 120);
 
 #include "rope/core/types.h"
+#include "rope/io/config_reader.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace rope::forecast {
 
@@ -20,43 +25,49 @@ namespace rope::forecast {
 // Config — all paths and tuning parameters needed to construct a Pipeline.
 // ---------------------------------------------------------------------------
 struct Config {
-    // Directory produced by export_models.py (contains *.onnx, *.bin,
-    // driver_config.json, ic_config.json, ic_table.icbin or ic_table.csv).
+    // Directory produced by export_models.py.
     std::filesystem::path exported_dir;
 
-    // Explicit driver data file (.swbin or .csv, format auto-detected).
-    // When set, bypasses the cache manager entirely — no network access.
-    // Leave empty to let driver_config.json + DriverCacheManager supply data.
+    // Explicit driver file (.swbin/.csv). Empty: use driver_config.json + DriverCacheManager.
     std::filesystem::path driver_path;
 
-    // Directory for cached .swbin files written by DriverCacheManager.
-    // Defaults to the platform cache root when empty.
+    // Cached .swbin directory. Empty: platform cache root.
     std::filesystem::path cache_dir;
 
-    // How old a cached driver file may be before refresh is attempted.
+    // Max cached driver file age before refresh.
     int cache_max_age_hours = 24;
 
     // ORT intra-op threads for the 15 base models.
     int intra_threads_base    = 1;
 
-    // ORT intra-op threads for the meta model.
-    // 0 = std::thread::hardware_concurrency().
+    // ORT intra-op threads for the meta model. 0 = hardware_concurrency().
     int intra_threads_meta    = 0;
 
-    // ORT intra-op threads for the COAE decoder.
-    // 0 = std::thread::hardware_concurrency().
+    // ORT intra-op threads for the COAE decoder. 0 = hardware_concurrency().
     int intra_threads_decoder = 0;
 
-    // PyTorch device string for the COAE decoder when LibTorch is linked.
+    // LibTorch device string for the COAE decoder.
     std::string decoder_device = "cpu";
 
-    // When false, skip the Unscented Transform; uncertainty is set to 0.
+    // When false, skip the Unscented Transform; uncertainty is 0.
     bool compute_uncertainty = true;
 
-    // Progress callback invoked during pipeline load (model names, timing, etc.).
-    // Called on the constructor thread. Default (nullptr): silent.
+    // Max forecast-hours of decoded voxel data held at once. <= 0: one chunk (whole horizon).
+    int decode_chunk_hours = 72;
+
+    // Load-progress callback. Default (nullptr): silent.
     std::function<void(std::string_view)> log;
 };
+
+// ---------------------------------------------------------------------------
+// GridChunkSink — one contiguous slice of the grid, increasing t_offset order.
+// LatentSink — the full (H, latent_dim) latent trajectory, called once.
+// ---------------------------------------------------------------------------
+using GridChunkSink = std::function<void(int t_offset,
+                                          std::span<const std::int64_t> times,
+                                          std::span<const float> density,
+                                          std::span<const float> uncertainty)>;
+using LatentSink = std::function<void(std::span<const float> latent_mean)>;
 
 // ---------------------------------------------------------------------------
 // Pipeline — abstract interface; constructed by load().
@@ -65,17 +76,55 @@ class Pipeline {
 public:
     virtual ~Pipeline() = default;
 
-    // Run the full ROPE forecast pipeline.
-    //   start_iso : "YYYY-MM-DD HH:MM:SS" UTC (rounded to the hour internally)
-    //   horizon   : forecast length in hours (H)
-    // Returns a ForecastGrid with H time steps, density and uncertainty fields.
-    virtual ForecastGrid run(const std::string& start_iso, int horizon) = 0;
+    // Collects run_streaming() into one in-memory ForecastGrid.
+    // latent_mean_out, when non-null, is filled with the (H, latent_dim) latent trajectory.
+    ForecastGrid run(const std::string& start_iso, int horizon,
+                     std::vector<float>* latent_mean_out = nullptr)
+    {
+        ForecastGrid grid;
+        grid.shape = grid_shape();
+        grid.H = horizon;
+        const std::size_t voxels = static_cast<std::size_t>(grid.shape.voxels());
+        grid.times.resize(static_cast<std::size_t>(horizon));
+        grid.density.resize(static_cast<std::size_t>(horizon) * voxels);
+        grid.uncertainty.resize(static_cast<std::size_t>(horizon) * voxels);
+
+        run_streaming(start_iso, horizon, /*chunk_hours=*/horizon,
+            [&](int t_offset, std::span<const std::int64_t> times,
+                std::span<const float> density, std::span<const float> uncertainty) {
+                std::copy(times.begin(), times.end(), grid.times.begin() + t_offset);
+                std::copy(density.begin(), density.end(),
+                          grid.density.begin() + static_cast<std::size_t>(t_offset) * voxels);
+                std::copy(uncertainty.begin(), uncertainty.end(),
+                          grid.uncertainty.begin() + static_cast<std::size_t>(t_offset) * voxels);
+            },
+            latent_mean_out
+                ? LatentSink{[latent_mean_out](std::span<const float> lm) {
+                      latent_mean_out->assign(lm.begin(), lm.end());
+                  }}
+                : LatentSink{});
+        return grid;
+    }
+
+    virtual void run_streaming(const std::string& start_iso, int horizon,
+                                int chunk_hours, const GridChunkSink& sink,
+                                const LatentSink& latent_sink = nullptr) = 0;
+
+    virtual GridSpec grid_shape() const = 0;
+    virtual std::string model_kind() const = 0;
+    virtual int latent_dim() const = 0;
 };
 
 // ---------------------------------------------------------------------------
-// load() — construct and initialize the pipeline from cfg.
-// Loads all models and data tables from disk.  Throws on any error.
+// load() — construct and initialize the pipeline from cfg. Throws on error.
 // ---------------------------------------------------------------------------
 std::unique_ptr<Pipeline> load(const Config& cfg);
+
+// ---------------------------------------------------------------------------
+// config_from_reader() — build a Config from a parsed rope.conf.
+// Relative paths resolve against config_dir.
+// ---------------------------------------------------------------------------
+Config config_from_reader(const io::ConfigReader& config,
+                          const std::filesystem::path& config_dir);
 
 } // namespace rope::forecast

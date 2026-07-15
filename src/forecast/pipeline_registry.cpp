@@ -1,5 +1,5 @@
 #include "pipeline_registry.h"
-#include "ensemble_fusion_decoder_pipeline.h"
+#include "stacked_ensemble/stacked_ensemble_pipeline.h"
 #include <stdexcept>
 
 namespace rope::forecast {
@@ -7,8 +7,8 @@ namespace rope::forecast {
 std::unique_ptr<Pipeline> create_pipeline_for_kind(
     const Config& cfg, const io::ModelManifest& manifest)
 {
-    if (manifest.kind == "ensemble_fusion_decoder")
-        return std::make_unique<EnsembleFusionDecoderPipeline>(cfg, manifest);
+    if (manifest.kind == "stacked_ensemble")
+        return std::make_unique<StackedEnsemblePipeline>(cfg, manifest);
 
     throw std::runtime_error(
         "pipeline_registry: unrecognized kind '" + manifest.kind + "'");

@@ -1,8 +1,9 @@
 """
 rope.py — Python binding for the ROPE framework.
 
-Wraps librope.so via ctypes for fast in-process interpolation queries, and
-the rope CLI subprocess for forecast and server lifecycle management.
+Wraps librope.so via ctypes for fast in-process interpolation queries
+against a memory-mapped forecast-grid cache file, and the rope CLI
+subprocess to run forecasts (which write that cache file).
 
 Typical usage
 -------------
@@ -32,12 +33,12 @@ ROPE_INTERP = 1
 
 _ERR_NAMES = {
     0: "ok",
-    1: "no server",
     2: "no forecast cached",
     3: "time out of range",
     4: "spatial point out of range",
     5: "bad argument",
     6: "internal error",
+    7: "forecast cache corrupt",
 }
 
 
@@ -57,7 +58,7 @@ class Rope:
                   Defaults to lib/librope.so relative to the archive root.
     exe_path    : Path to the rope CLI executable.
                   Defaults to bin/rope relative to the archive root.
-    socket_path : Unix domain socket path. None → platform default (/tmp/rope.sock).
+    cache_path  : Forecast-grid cache file path. None → platform default.
     config_path : Path to rope.conf. Defaults to config/rope.conf in the archive root.
     device      : Decoder device string (e.g. "cpu", "cuda", "cuda:1").
                   Defaults to the value in rope.conf. Only affects LibTorch builds;
@@ -68,7 +69,7 @@ class Rope:
         self,
         lib_path: "str | Path | None" = None,
         exe_path: "str | Path | None" = None,
-        socket_path: "str | None" = None,
+        cache_path: "str | None" = None,
         config_path: "str | Path | None" = None,
         device: "str | None" = None,
     ):
@@ -101,8 +102,8 @@ class Rope:
         conf_device   = _conf_get(resolved_conf, "decoder", "device", "cpu")
         self._device  = device if device is not None else conf_device
 
-        # If device is explicitly overridden, write a temp config so the server
-        # subprocess picks it up via --config.
+        # If device is explicitly overridden, write a temp config so the
+        # forecast subprocess picks it up via --config.
         if device is not None and device != conf_device:
             self._temp_conf_path = _write_temp_conf(resolved_conf, "decoder", "device", device)
             self._config_path    = Path(self._temp_conf_path)
@@ -110,12 +111,11 @@ class Rope:
             self._temp_conf_path = None
             self._config_path    = resolved_conf
 
-        self._lib_path    = Path(lib_path)
-        self._exe_path    = Path(exe_path) if exe_path else None
-        self._socket_path = socket_path
+        self._lib_path   = Path(lib_path)
+        self._exe_path   = Path(exe_path) if exe_path else None
+        self._cache_path = cache_path
         self._handle: "int | None" = None
-        self._shutdown_sent = False
-        self._lib         = self._load_lib()
+        self._lib        = self._load_lib()
 
         # Pre-allocated buffers for get_density() — avoids per-call allocation.
         self._qden = ctypes.c_double()
@@ -152,59 +152,49 @@ class Rope:
     # ------------------------------------------------------------------
 
     def open(self):
-        """Fetch the cached grid from the server and open an interpolation handle."""
+        """Memory-map the cached forecast grid and open an interpolation handle."""
         if self._handle is not None:
             return
-        err  = ctypes.create_string_buffer(256)
-        sock = self._socket_path.encode() if self._socket_path else None
-        handle = self._lib.rope_open(sock, err, len(err))
+        err   = ctypes.create_string_buffer(256)
+        cache = self._cache_path.encode() if self._cache_path else None
+        handle = self._lib.rope_open(cache, err, len(err))
         if not handle:
-            raise RopeError(1, err.value.decode())
+            raise RopeError(2, err.value.decode())
         self._handle = handle
 
     def close(self):
-        """Release the interpolation handle. Does not affect the server."""
+        """Release the interpolation handle (unmaps the cache file)."""
         if self._handle is not None:
             self._lib.rope_close(self._handle)
             self._handle = None
 
     def refresh(self):
-        """Re-fetch the grid from the server (picks up a new forecast)."""
+        """Re-map the current cache file (picks up a forecast written since open())."""
         self.close()
         self.open()
 
     def shutdown(self):
-        """Send the exit command to the server, stopping it.
-
-        Idempotent: a second call is a no-op. Without this guard, a caller
-        that explicitly shuts down and then lets the process exit normally
-        hits this twice (once explicitly, once via the atexit hook
-        registered in __init__) -- the second call's connect() can still
-        succeed while the server is mid-exit, but nothing ever services it,
-        and the underlying IPC client has no receive timeout, so the second
-        call hangs forever rather than failing fast.
+        """Alias for close(). There is no background process to stop --
+        kept as a method (and registered with atexit in __init__) for
+        source compatibility with existing scripts.
         """
-        if self._shutdown_sent:
-            return
-        self._shutdown_sent = True
-        err  = ctypes.create_string_buffer(256)
-        sock = self._socket_path.encode() if self._socket_path else None
-        self._lib.rope_server_stop(sock, err, len(err))
+        self.close()
 
     # ------------------------------------------------------------------
-    # Server commands (via CLI subprocess)
+    # Forecast (via CLI subprocess)
     # ------------------------------------------------------------------
 
     def forecast(self, start: "str | datetime", horizon: int) -> dict:
         """
-        Ask the server to run a forecast and cache the resulting grid.
+        Run a forecast and atomically write the resulting grid to the cache
+        file (discarding any previous forecast).
 
         Parameters
         ----------
         start   : Forecast start time — ISO 8601 string or datetime (UTC).
         horizon : Forecast duration in hours.
 
-        Returns the server response, e.g.:
+        Returns the CLI's response, e.g.:
             {"status": "ok", "window_start": "...", "window_end": "..."}
         """
         if self._exe_path is None:
@@ -215,10 +205,10 @@ class Rope:
                 start = start.replace(tzinfo=timezone.utc)
             start = start.strftime("%Y-%m-%d %H:%M:%S")
 
-        # --socket is a global option and must precede the subcommand name.
+        # --cache-path is a global option and must precede the subcommand name.
         cmd = [str(self._exe_path)]
-        if self._socket_path:
-            cmd += ["--socket", self._socket_path]
+        if self._cache_path:
+            cmd += ["--cache-path", self._cache_path]
         cmd += ["forecast", "--start", start, "--horizon", str(horizon)]
         if self._config_path:
             cmd += ["--config", str(self._config_path)]
@@ -371,9 +361,6 @@ class Rope:
 
         lib.rope_close.restype  = None
         lib.rope_close.argtypes = [ctypes.c_void_p]
-
-        lib.rope_server_stop.restype  = ctypes.c_int
-        lib.rope_server_stop.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
 
         return lib
 

@@ -10,30 +10,41 @@
 //   rope forecast --start <ISO8601> --horizon <h> [--config <path>]
 //   rope get      --mode hold|interp --time <ISO8601> --lst <f> --lat <f> --alt <f>
 //   rope get      --mode hold|interp --file <csv> [--output <path>]
-//   rope exit
 //
-// Hidden internal command (spawned by 'rope forecast'):
-//   rope --serve --socket-path <path> --config-path <path>
+// `rope forecast` runs inference in this process and atomically writes the
+// resulting grid to a per-user cache file; `rope get` reads that file
+// (memory-mapped) and interpolates locally. No background server, no IPC.
 
-#include "rope/client/client.h"
 #include "rope/core/datetime.h"
 #include "rope/core/platform.h"
+#include "rope/interpolate/grid_interpolator.h"
+#include "rope/io/config_reader.h"
 #include "rope/io/csv_reader.h"
 #include "rope/io/driver_db.h"
 #include "rope/io/driver_bin.h"
+#include "rope/io/forecast_grid_bin.h"
 #include "rope/io/ic_table.h"
 #include "rope/io/ic_bin.h"
-#include "rope/server/server.h"
+#include "rope/io/mapped_forecast_grid.h"
+
+#ifdef ROPE_HAS_ZARR
+#include "rope/io/forecast_zarr_writer.h"
+#endif
+
+#ifdef ROPE_HAS_FORECAST
+#include "rope/forecast/pipeline.h"
+#endif
 
 #include <CLI/CLI.hpp>
 #include <nlohmann/json.hpp>
 
-#include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
+#include <span>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -52,63 +63,18 @@ static fs::path default_config(const fs::path& exe) {
     return exe.parent_path().parent_path() / "config" / "rope.conf";
 }
 
-// Wait up to timeout_ms for the socket file to appear and accept a connection.
-static bool wait_for_server(const fs::path& sock, int timeout_ms = 6000) {
-    const int step_ms = 200;
-    for (int elapsed = 0; elapsed < timeout_ms; elapsed += step_ms) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(step_ms));
-        try {
-            auto s = rope::platform::IpcSocket::connect(sock);
-            return true;
-        } catch (...) {}
-    }
-    return false;
-}
-
-// Connect to the server, spawning it first if needed.
-// Returns a connected IpcClient.
-static rope::client::IpcClient connect_or_spawn(
-    const fs::path& socket_path, const fs::path& config_path,
-    bool spawn_if_absent)
-{
-    try {
-        return rope::client::IpcClient{socket_path};
-    } catch (...) {}
-
-    if (!spawn_if_absent) {
-        std::cerr << "rope: server is not running. "
-                     "Run 'rope forecast' first.\n";
-        std::exit(1);
-    }
-
-    // Remove stale socket file if it exists but is unresponsive.
-    if (fs::exists(socket_path))
-        fs::remove(socket_path);
-
-    rope::platform::spawn_server(exe_path(), socket_path, config_path);
-
-    if (!wait_for_server(socket_path)) {
-        std::cerr << "rope: timed out waiting for server to start\n";
-        std::exit(1);
-    }
-
-    return rope::client::IpcClient{socket_path};
-}
-
 // ---------------------------------------------------------------------------
 // Batch-file processing for 'rope get --file'
 // ---------------------------------------------------------------------------
 
-static int run_batch_get(rope::client::IpcClient& client,
+static int run_batch_get(rope::interpolate::GridInterpolator<rope::io::MappedForecastGrid>& interp,
                           const std::string& mode,
                           const fs::path& file_path,
                           const fs::path& output_path) {
     rope::io::CsvReader csv{file_path};
     std::size_t N = csv.nrows();
 
-    std::vector<rope::client::BatchPoint> pts;
-    pts.reserve(N);
-
+    json out = json::array();
     for (std::size_t i = 0; i < N; ++i) {
         int yr  = csv.get_int("YYYY", i);
         int mo  = csv.get_int("MM",   i);
@@ -120,26 +86,23 @@ static int run_batch_get(rope::client::IpcClient& client,
         char buf[24];
         std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d",
                       yr, mo, dy, hr, mn, sc);
+        std::string time_iso{buf};
 
-        pts.push_back({
-            std::string{buf},
-            csv.get_float("lst",    i),
-            csv.get_float("lat",    i),
-            csv.get_float("alt_km", i)
-        });
-    }
+        double lst    = csv.get_float("lst",    i);
+        double lat    = csv.get_float("lat",    i);
+        double alt_km = csv.get_float("alt_km", i);
 
-    auto results = client.batch_get(mode, pts);
+        auto tp = rope::parse_datetime(time_iso);
+        auto r  = (mode == "hold") ? interp.query_hold(tp, lst, lat, alt_km)
+                                    : interp.query_interp(tp, lst, lat, alt_km);
 
-    json out = json::array();
-    for (std::size_t i = 0; i < results.size(); ++i) {
         out.push_back({
-            {"time",        pts[i].time_iso},
-            {"lst",         pts[i].lst},
-            {"lat",         pts[i].lat},
-            {"alt_km",      pts[i].alt_km},
-            {"density",     results[i].density},
-            {"uncertainty", results[i].uncertainty}
+            {"time",        time_iso},
+            {"lst",         lst},
+            {"lat",         lat},
+            {"alt_km",      alt_km},
+            {"density",     r.density},
+            {"uncertainty", r.uncertainty}
         });
     }
 
@@ -165,27 +128,23 @@ int main(int argc, char** argv) {
     CLI::App app{"ROPE atmospheric density forecasting service", "rope"};
     app.require_subcommand(0, 1);
 
-    // ---- hidden --serve mode ----
-    bool        do_serve    = false;
-    std::string serve_sock, serve_conf;
-    app.add_flag("--serve", do_serve)->group("");
-    app.add_option("--socket-path", serve_sock)->group("");
-    app.add_option("--config-path", serve_conf)->group("");
-
-    // ---- hidden --socket override (testing / multi-instance use) ----
-    std::string cli_socket;
-    app.add_option("--socket", cli_socket, "Override the server socket path")->group("");
+    // ---- hidden --cache-path override (testing / multi-instance use) ----
+    std::string cli_cache_path;
+    app.add_option("--cache-path", cli_cache_path,
+                   "Override the forecast-grid cache file path")->group("");
 
     // ---- forecast subcommand ----
     auto* fc = app.add_subcommand("forecast",
-                                   "Run a forecast and cache the grid in the server");
-    std::string fc_start, fc_config;
+                                   "Run a forecast and cache the resulting grid");
+    std::string fc_start, fc_config, fc_zarr;
     int         fc_horizon = 0;
     fc->add_option("--start",   fc_start,   "Forecast start time (ISO 8601, UTC)")
       ->required();
     fc->add_option("--horizon", fc_horizon, "Forecast duration in hours")
       ->required();
     fc->add_option("--config",  fc_config,  "Config file path");
+    fc->add_option("--zarr",    fc_zarr,
+                   "Also export as a Zarr store (container directory)");
 
     // ---- get subcommand ----
     auto* gc = app.add_subcommand("get",
@@ -218,64 +177,112 @@ int main(int argc, char** argv) {
     ic->add_option("--output", ic_output, "Output .icbin file")
       ->required();
 
-    // ---- exit subcommand ----
-    auto* ec = app.add_subcommand("exit", "Terminate the server cleanly");
-
     CLI11_PARSE(app, argc, argv);
 
-    // ---- --serve path ----
-    if (do_serve) {
-        if (serve_sock.empty() || serve_conf.empty()) {
-            std::cerr << "rope --serve: --socket-path and --config-path are required\n";
-            return 1;
-        }
-        try {
-            rope::server::run(fs::path{serve_sock}, fs::path{serve_conf});
-        } catch (const std::exception& e) {
-            std::cerr << "rope --serve: " << e.what() << "\n";
-            return 1;
-        }
-        return 0;
-    }
-
-    // ---- Determine socket and config paths ----
-    fs::path socket_path = cli_socket.empty()
-        ? rope::platform::default_socket_path()
-        : fs::path{cli_socket};
-    fs::path config_path;
-
-    if (fc->parsed()) {
-        config_path = fc_config.empty()
-            ? default_config(exe_path())
-            : fs::path{fc_config};
-    } else {
-        config_path = default_config(exe_path());
-    }
+    // ---- Determine cache and config paths ----
+    fs::path cache_path = cli_cache_path.empty()
+        ? rope::platform::default_forecast_cache_path()
+        : fs::path{cli_cache_path};
 
     // ---- forecast ----
     if (fc->parsed()) {
+#ifndef ROPE_HAS_FORECAST
+        std::cerr << "rope forecast: this build was compiled without ONNX Runtime; "
+                     "forecast is unavailable\n";
+        return 1;
+#else
+        fs::path config_path = fc_config.empty()
+            ? default_config(exe_path())
+            : fs::path{fc_config};
+#ifndef ROPE_HAS_ZARR
+        if (!fc_zarr.empty()) {
+            std::cerr << "rope forecast: this build was compiled without Zarr support; "
+                         "--zarr is unavailable\n";
+            return 1;
+        }
+#endif
         try {
-            auto client = connect_or_spawn(socket_path, config_path, /*spawn=*/true);
-            auto res    = client.forecast(fc_start, fc_horizon);
-            std::cout << json{
+            rope::io::ConfigReader config{config_path};
+            auto fcfg = rope::forecast::config_from_reader(config, config_path.parent_path());
+            auto pipeline = rope::forecast::load(fcfg);
+
+            {
+                const int n_sig = 2 * pipeline->latent_dim() + 1;
+                const long long voxels = pipeline->grid_shape().voxels();
+                const int effective_chunk_hours =
+                    fcfg.decode_chunk_hours > 0 ? fcfg.decode_chunk_hours : fc_horizon;
+                const double est_mb = static_cast<double>(effective_chunk_hours) *
+                                      n_sig * voxels * 4 * 2 / (1024.0 * 1024.0);
+                std::cerr << "rope forecast: decode_chunk_hours=" << fcfg.decode_chunk_hours
+                          << " (effective=" << effective_chunk_hours << ")"
+                          << "  estimated peak decode memory ~" << est_mb << " MB\n";
+            }
+
+            auto writer = rope::io::ForecastGridBinWriter::open(
+                pipeline->grid_shape(), fc_horizon, cache_path);
+
+#ifdef ROPE_HAS_ZARR
+            std::optional<rope::io::ForecastZarrWriter> zarr;
+            rope::forecast::LatentSink latent_sink;
+            if (!fc_zarr.empty()) {
+                latent_sink = [&](std::span<const float> latent_mean) {
+                    zarr = rope::io::ForecastZarrWriter::open(
+                        pipeline->grid_shape(), fc_horizon, pipeline->latent_dim(),
+                        pipeline->model_kind(),
+                        fc_start, fs::path{fc_zarr});
+                    zarr->write_latent(latent_mean);
+                };
+            }
+#endif
+
+            std::string window_start, window_end;
+            pipeline->run_streaming(fc_start, fc_horizon, fcfg.decode_chunk_hours,
+                [&](int t_offset, std::span<const std::int64_t> times,
+                    std::span<const float> density, std::span<const float> uncertainty) {
+                    writer.write_chunk(t_offset, times, density, uncertainty);
+#ifdef ROPE_HAS_ZARR
+                    if (zarr) zarr->write_chunk(t_offset, times, density, uncertainty);
+#endif
+                    if (t_offset == 0) window_start = rope::format_iso(times.front());
+                    window_end = rope::format_iso(times.back());
+                }
+#ifdef ROPE_HAS_ZARR
+                , latent_sink
+#endif
+            );
+
+            writer.close();
+
+            json status{
                 {"status",       "ok"},
-                {"window_start", res.window_start},
-                {"window_end",   res.window_end}
-            }.dump() << "\n";
+                {"window_start", window_start},
+                {"window_end",   window_end}
+            };
+
+#ifdef ROPE_HAS_ZARR
+            if (zarr) {
+                zarr->close();
+                status["zarr_path"] = zarr->store_path().string();
+            }
+#endif
+
+            std::cout << status.dump() << "\n";
         } catch (const std::exception& e) {
             std::cerr << "rope forecast: " << e.what() << "\n";
             return 1;
         }
         return 0;
+#endif
     }
 
     // ---- get ----
     if (gc->parsed()) {
         try {
-            auto client = connect_or_spawn(socket_path, config_path, /*spawn=*/false);
+            rope::io::MappedForecastGrid grid = rope::io::MappedForecastGrid::open(cache_path);
+            rope::interpolate::GridInterpolator<rope::io::MappedForecastGrid> interp{grid};
 
             if (!gc_file.empty()) {
-                return run_batch_get(client, gc_mode,
+                return run_batch_get(interp, gc_mode,
                                      fs::path{gc_file},
                                      fs::path{gc_output});
             }
@@ -285,26 +292,20 @@ int main(int argc, char** argv) {
                 std::cerr << "rope get: --time is required when --file is not given\n";
                 return 1;
             }
-            auto res = client.get(gc_mode, gc_time, gc_lst, gc_lat, gc_alt);
+            auto tp = rope::parse_datetime(gc_time);
+            auto r  = (gc_mode == "hold") ? interp.query_hold(tp, gc_lst, gc_lat, gc_alt)
+                                          : interp.query_interp(tp, gc_lst, gc_lat, gc_alt);
             std::cout << json{
                 {"status",      "ok"},
-                {"density",     res.density},
-                {"uncertainty", res.uncertainty}
+                {"density",     r.density},
+                {"uncertainty", r.uncertainty}
             }.dump() << "\n";
+        } catch (const rope::io::ForecastCacheMissingError&) {
+            std::cerr << "rope get: no forecast cached; run 'rope forecast' first.\n";
+            return 1;
         } catch (const std::exception& e) {
             std::cerr << "rope get: " << e.what() << "\n";
             return 1;
-        }
-        return 0;
-    }
-
-    // ---- exit ----
-    if (ec->parsed()) {
-        try {
-            rope::client::IpcClient client{socket_path};
-            client.exit_server();
-        } catch (...) {
-            // If nothing is running, exit is a no-op success.
         }
         return 0;
     }

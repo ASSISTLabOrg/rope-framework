@@ -1,4 +1,5 @@
-// C API implementation — wraps client + interpolate for in-process queries.
+// C API implementation — wraps io::MappedForecastGrid + interpolate for
+// in-process queries.
 //
 // Exception boundary: every public function catches all exceptions and
 // converts them to return codes + err_buf.  No C++ exception may cross
@@ -6,25 +7,24 @@
 
 #include "rope/capi/rope.h"
 
-#include "rope/client/client.h"
 #include "rope/core/datetime.h"
 #include "rope/core/platform.h"
 #include "rope/interpolate/grid_interpolator.h"
+#include "rope/io/mapped_forecast_grid.h"
 
 #include <cstring>
 #include <memory>
 #include <string>
-#include <string_view>
 
 // ---------------------------------------------------------------------------
 // Opaque handle
 // ---------------------------------------------------------------------------
 
 struct rope_interp {
-    rope::ForecastGrid                             grid;
-    rope::interpolate::GridInterpolator            interp;
+    rope::io::MappedForecastGrid                          grid;
+    rope::interpolate::GridInterpolator<rope::io::MappedForecastGrid> interp;
 
-    explicit rope_interp(rope::ForecastGrid g)
+    explicit rope_interp(rope::io::MappedForecastGrid g)
         : grid(std::move(g)), interp(grid) {}
 };
 
@@ -43,9 +43,8 @@ void fill_err(char* err_buf, int err_len, const char* msg) noexcept {
 
 int classify_exception(const std::exception* e) noexcept {
     if (!e) return ROPE_ERR_INTERNAL;
-    std::string_view w = e->what();
-    if (w.find("no_forecast") != std::string_view::npos) return ROPE_ERR_NO_FORECAST;
-    if (w.find("connect")     != std::string_view::npos) return ROPE_ERR_NO_SERVER;
+    if (dynamic_cast<const rope::io::ForecastCacheMissingError*>(e)) return ROPE_ERR_NO_FORECAST;
+    if (dynamic_cast<const rope::io::ForecastCacheCorruptError*>(e)) return ROPE_ERR_CACHE_CORRUPT;
     return ROPE_ERR_INTERNAL;
 }
 
@@ -55,14 +54,13 @@ int classify_exception(const std::exception* e) noexcept {
 // rope_open
 // ---------------------------------------------------------------------------
 
-rope_interp_t* rope_open(const char* sock_path, char* err_buf, int err_len) {
+rope_interp_t* rope_open(const char* cache_path, char* err_buf, int err_len) {
     try {
-        auto path = sock_path
-            ? std::filesystem::path{sock_path}
-            : rope::platform::default_socket_path();
+        auto path = cache_path
+            ? std::filesystem::path{cache_path}
+            : rope::platform::default_forecast_cache_path();
 
-        rope::client::IpcClient client{path};
-        rope::ForecastGrid grid = client.fetch_grid();
+        rope::io::MappedForecastGrid grid = rope::io::MappedForecastGrid::open(path);
         return new rope_interp{std::move(grid)};
     } catch (const std::exception& e) {
         fill_err(err_buf, err_len, e.what());
@@ -162,25 +160,4 @@ int rope_query_batch(rope_interp_t* interp,
 
 void rope_close(rope_interp_t* interp) {
     delete interp;
-}
-
-// ---------------------------------------------------------------------------
-// rope_server_stop
-// ---------------------------------------------------------------------------
-
-int rope_server_stop(const char* sock_path, char* err_buf, int err_len) {
-    try {
-        auto path = sock_path
-            ? std::filesystem::path{sock_path}
-            : rope::platform::default_socket_path();
-        rope::client::IpcClient client{path};
-        client.exit_server();
-        return ROPE_OK;
-    } catch (const std::exception& e) {
-        fill_err(err_buf, err_len, e.what());
-        return classify_exception(&e);
-    } catch (...) {
-        fill_err(err_buf, err_len, "rope_server_stop: unknown error");
-        return ROPE_ERR_INTERNAL;
-    }
 }

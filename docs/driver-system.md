@@ -28,7 +28,7 @@ Defined in `include/rope/io/driver_db.h`. Represents one hour of derived driver 
 
 `include/rope/io/driver_db.h`, `src/io/driver_db.cpp`
 
-An in-memory column-oriented store of hourly space weather data. Loads at server startup; never modified at runtime.
+An in-memory column-oriented store of hourly space weather data. Loads when `rope forecast` constructs the pipeline; never modified at runtime.
 
 **Internal layout:**
 ```

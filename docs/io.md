@@ -33,7 +33,7 @@ INI-style key-value reader. Sections are written as `[section]`; keys are access
 ConfigReader cfg(path);
 cfg.has("paths.driver_path")                   // existence check
 cfg.get("paths.driver_path")                   // required; throws if absent
-cfg.get("server.idle_timeout_seconds", "1800") // optional with default
+cfg.get("decoder.device", "cpu")               // optional with default
 cfg.get_int("threads.intra_threads_base", 1)
 cfg.get_double("some.float", 0.0)
 ```

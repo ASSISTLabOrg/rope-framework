@@ -30,6 +30,8 @@ add_executable(rope_tests
     test_model_manifest.cpp
     test_grid_stitch.cpp
     test_kind_registry.cpp
+    test_forecast_grid_bin.cpp
+    test_mapped_forecast_grid.cpp
 )
 target_link_libraries(rope_tests
     PRIVATE Catch2::Catch2WithMain
@@ -38,6 +40,10 @@ target_link_libraries(rope_tests
             rope_core
             nlohmann_json::nlohmann_json
 )
+if(ROPE_USE_ZARR)
+    target_sources(rope_tests PRIVATE test_forecast_zarr_writer.cpp)
+    target_link_libraries(rope_tests PRIVATE ZLIB::ZLIB)
+endif()
 target_include_directories(rope_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../src/forecast"
 )
@@ -53,6 +59,7 @@ if(TARGET rope_forecast)
     add_executable(rope_pipeline_tests
         test_pipeline.cpp
         test_manifest_failures.cpp
+        test_streaming_pipeline.cpp
     )
     target_link_libraries(rope_pipeline_tests
         PRIVATE Catch2::Catch2WithMain
@@ -90,6 +97,18 @@ if(TARGET rope_forecast)
     else()
         catch_discover_tests(rope_pipeline_tests)
     endif()
+
+    # Only meaningful in a ROPE_USE_ZARR=OFF build; doesn't run otherwise.
+    if(NOT ROPE_USE_ZARR)
+        add_test(
+            NAME    rope_zarr_off_fails_loudly
+            COMMAND rope_exe forecast --start "2024-01-01 00:00:00" --horizon 1
+                    --zarr "${CMAKE_CURRENT_BINARY_DIR}/zarr_off_test"
+        )
+        set_tests_properties(rope_zarr_off_fails_loudly PROPERTIES
+            PASS_REGULAR_EXPRESSION "without Zarr support"
+        )
+    endif()
 endif()
 
 if(TARGET rope_forecast)
@@ -99,6 +118,7 @@ if(TARGET rope_forecast)
             NAME    rope_cli_tests
             COMMAND ${Python3_EXECUTABLE} -m pytest
                     ${CMAKE_CURRENT_SOURCE_DIR}/../python/test_cli.py
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../python/test_zarr_export.py
                     -v --tb=short
         )
         set_tests_properties(rope_cli_tests PROPERTIES

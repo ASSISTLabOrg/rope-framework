@@ -30,8 +30,8 @@ TEST_CASE("Pipeline: run() returns correctly shaped ForecastGrid") {
     auto grid = pipe->run(TEST_START, TEST_HORIZON);
 
     CHECK(grid.H == TEST_HORIZON);
-    CHECK(static_cast<int>(grid.density.size())     == TEST_HORIZON * rope::GRID_VOXELS);
-    CHECK(static_cast<int>(grid.uncertainty.size()) == TEST_HORIZON * rope::GRID_VOXELS);
+    CHECK(static_cast<int>(grid.density.size())     == TEST_HORIZON * grid.shape.voxels());
+    CHECK(static_cast<int>(grid.uncertainty.size()) == TEST_HORIZON * grid.shape.voxels());
     CHECK(static_cast<int>(grid.times.size())       == TEST_HORIZON);
 }
 
@@ -92,8 +92,8 @@ TEST_CASE("Pipeline: M=3 small ensemble produces correctly shaped ForecastGrid")
 
     auto grid = pipe->run(TEST_START, TEST_HORIZON);
     CHECK(grid.H == TEST_HORIZON);
-    CHECK(static_cast<int>(grid.density.size())     == TEST_HORIZON * rope::GRID_VOXELS);
-    CHECK(static_cast<int>(grid.uncertainty.size()) == TEST_HORIZON * rope::GRID_VOXELS);
+    CHECK(static_cast<int>(grid.density.size())     == TEST_HORIZON * grid.shape.voxels());
+    CHECK(static_cast<int>(grid.uncertainty.size()) == TEST_HORIZON * grid.shape.voxels());
     CHECK(static_cast<int>(grid.times.size())       == TEST_HORIZON);
     for (float d : grid.density)
         CHECK(d > 0.0f);
@@ -115,16 +115,17 @@ TEST_CASE("Pipeline: split-decoder stages land in correct altitude ranges") {
 
     auto grid = pipe->run(TEST_START, 1);  // H=1; one frame is enough
     REQUIRE(grid.H == 1);
-    REQUIRE(static_cast<int>(grid.density.size()) == rope::GRID_VOXELS);
+    REQUIRE(static_cast<int>(grid.density.size()) == grid.shape.voxels());
 
+    const int n_lst = grid.shape.n_lst, n_lat = grid.shape.n_lat, n_alt = grid.shape.n_alt;
     bool lo_ok = true, hi_ok = true;
-    for (int lst = 0; lst < rope::GRID_LST && (lo_ok || hi_ok); ++lst)
-        for (int lat = 0; lat < rope::GRID_LAT && (lo_ok || hi_ok); ++lat) {
+    for (int lst = 0; lst < n_lst && (lo_ok || hi_ok); ++lst)
+        for (int lat = 0; lat < n_lat && (lo_ok || hi_ok); ++lat) {
             const float* col = grid.density.data()
-                               + (lst * rope::GRID_LAT + lat) * rope::GRID_ALT;
-            for (int alt = 0;     alt < SPLIT;         ++alt)
+                               + (lst * n_lat + lat) * n_alt;
+            for (int alt = 0;     alt < SPLIT;  ++alt)
                 if (col[alt] != 1.0f)  { lo_ok = false; break; }
-            for (int alt = SPLIT; alt < rope::GRID_ALT; ++alt)
+            for (int alt = SPLIT; alt < n_alt;   ++alt)
                 if (col[alt] != 10.0f) { hi_ok = false; break; }
         }
     CHECK(lo_ok);

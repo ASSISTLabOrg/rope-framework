@@ -2,12 +2,13 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
 #include "rope/core/types.h"
 #include "rope/io/stats.h"
-#include "model_interface.h"
+#include "backends/model_interface.h"
 
 namespace rope::forecast {
 
@@ -15,15 +16,17 @@ class LatentDecoder {
 public:
     LatentDecoder(IModel&                    decoder_model,
                   const io::CAEDenormalizer& cae_denorm,
-                  int                        batch_size = 120,
-                  int                        n_alt      = GRID_ALT)
+                  int                        batch_size,
+                  int                        n_alt,
+                  int                        n_lst,
+                  int                        n_lat)
         : model_(decoder_model)
         , denorm_(cae_denorm)
         , batch_size_(batch_size)
-        , stage_voxels_(GRID_LST * GRID_LAT * n_alt)
+        , stage_voxels_(n_lst * n_lat * n_alt)
     {}
 
-    std::vector<float> decode(const std::vector<float>& latents, int H, int K) {
+    std::vector<float> decode(std::span<const float> latents, int H, int K) {
         assert(static_cast<int>(latents.size()) == H * K);
 
         std::vector<float> density(static_cast<size_t>(H) * stage_voxels_);

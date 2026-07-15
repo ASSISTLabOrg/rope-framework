@@ -10,14 +10,15 @@ Defined in `include/rope/core/types.h`. The in-memory result of a pipeline run:
 
 ```cpp
 struct ForecastGrid {
-    std::vector<float>        density;      // H * GRID_VOXELS float32
-    std::vector<float>        uncertainty;  // H * GRID_VOXELS float32
+    GridSpec                   shape;        // this model's grid shape (see below)
+    std::vector<float>        density;      // H * shape.voxels() float32
+    std::vector<float>        uncertainty;  // H * shape.voxels() float32
     std::vector<TimePoint>    times;        // H Unix timestamps (hourly)
     int H = 0;
 };
 ```
 
-**Grid dimensions:**
+**Grid dimensions are per-model**, declared in `model_manifest.json`'s top-level `grid` object and carried on `GridSpec` (`include/rope/core/types.h`) — different trained models may target different physical grids. LST's range is always the full 24h cycle by definition of what LST is; lat/alt each declare their own count and physical range. A typical/example shape:
 
 | Axis | Points | Range | Step |
 |------|--------|-------|------|
@@ -25,11 +26,11 @@ struct ForecastGrid {
 | Latitude | 36 | [−87.5, 87.5]° | 5° |
 | Altitude | 45 | [100, 980] km | 20 km |
 
-Total voxels per time step: `GRID_VOXELS = 72 × 36 × 45 = 116,640`.
+giving `shape.voxels() = 72 × 36 × 45 = 116,640` for that particular model — not a fixed constant.
 
 **Memory layout:** row-major `[t, lst, lat, alt]` with altitude as the fastest axis. Flat index:
 ```
-idx(t, lst, lat, alt) = t * 116640 + lst * (36*45) + lat * 45 + alt
+idx(t, lst, lat, alt) = t * shape.voxels() + lst * (shape.n_lat*shape.n_alt) + lat * shape.n_alt + alt
 ```
 
 **Times** cover `[start+1h, start+H]` — the H genuine predictions. The initial condition at `start+0h` is internal to the pipeline and not included in the grid.
@@ -56,11 +57,11 @@ No out-of-range error is raised for LST.
 
 ### Latitude
 
-Hard bounds: [−87.5, 87.5]. Requests outside this range throw `SpatialOutOfRangeError`. The 5° grid resolution means the extreme cells are at ±85°, and queries in [±85°, ±87.5°] extrapolate slightly but the grid is designed to be physically valid there.
+Hard bounds: `[shape.lat_min_deg, shape.lat_max_deg]`, per-model (e.g. [−87.5, 87.5] for the example shape above). Requests outside this range throw `SpatialOutOfRangeError`.
 
 ### Altitude
 
-Hard bounds: [100, 980] km. Requests outside this range throw `SpatialOutOfRangeError`.
+Hard bounds: `[shape.alt_min_km, shape.alt_max_km]`, per-model (e.g. [100, 980] km for the example shape above). Requests outside this range throw `SpatialOutOfRangeError`.
 
 ### Time
 
@@ -72,11 +73,11 @@ Hard bounds: `[times[0], times[H-1]]`. Requests outside this range throw `TimeOu
 
 Performed **independently per time step** in **log₁₀ space**:
 
-1. **LST axis:** uniform step (24/72 h). Compute the fractional cell index, extract the two bounding cells (`li0`, `li1`), compute weight `wl`. The last LST cell wraps to the first (`li1 = (li0+1) % 72`).
+1. **LST axis:** uniform step (`24 / shape.n_lst` hours). Compute the fractional cell index, extract the two bounding cells (`li0`, `li1`), compute weight `wl`. The last LST cell wraps to the first (`li1 = (li0+1) % shape.n_lst`).
 
-2. **Latitude axis:** uniform step (175/35 = 5°). Same approach; no wrapping.
+2. **Latitude axis:** uniform step (`(lat_max_deg - lat_min_deg) / (n_lat-1)`). Same approach; no wrapping.
 
-3. **Altitude axis:** uniform step (880/44 = 20 km). Same approach; no wrapping.
+3. **Altitude axis:** uniform step (`(alt_max_km - alt_min_km) / (n_alt-1)`). Same approach; no wrapping.
 
 4. **Trilinear interpolation** in log₁₀ space across the 8 surrounding voxels:
    ```
@@ -113,7 +114,7 @@ class TimeOutOfRangeError    : public std::runtime_error { ... };
 class SpatialOutOfRangeError : public std::runtime_error { ... };
 ```
 
-The server catches these separately and returns specific error codes to the client (`time_out_of_range`, `spatial_out_of_range`).
+Both the CLI and the C API (`src/capi/rope.cpp`'s `classify_exception`) catch these separately and map them to distinct error codes (`ROPE_ERR_TIME_RANGE`, `ROPE_ERR_SPATIAL_RANGE`).
 
 ---
 

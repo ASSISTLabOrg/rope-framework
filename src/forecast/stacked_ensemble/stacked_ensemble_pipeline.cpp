@@ -1,6 +1,6 @@
-#include "ensemble_fusion_decoder_pipeline.h"
+#include "stacked_ensemble_pipeline.h"
 
-#include "runtime_compat.h"
+#include "backends/runtime_compat.h"
 #include "grid_stitch.h"
 #include "sliding_window_rollout.h"
 #include "unscented_transform.h"
@@ -11,7 +11,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -48,21 +50,21 @@ static ModelBackend parse_backend(const std::string& s) {
     if (s == "libtorch") return ModelBackend::LibTorch;
 #endif
     throw std::runtime_error(
-        "EnsembleFusionDecoderPipeline: backend '" + s + "' is not compiled in");
+        "StackedEnsemblePipeline: backend '" + s + "' is not compiled in");
 }
 
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
 
-EnsembleFusionDecoderPipeline::EnsembleFusionDecoderPipeline(
+StackedEnsemblePipeline::StackedEnsemblePipeline(
     const Config& cfg, const io::ModelManifest& manifest)
 {
     log_ = cfg.log ? cfg.log : [](std::string_view){};
 
     check_runtime_compat(manifest.runtime_requirements);
 
-    const auto&     spec = *manifest.ensemble_fusion_decoder;
+    const auto&     spec = *manifest.stacked_ensemble;
     const fs::path& dir  = cfg.exported_dir;
 
     K_            = manifest.latent_dim;
@@ -72,6 +74,8 @@ EnsembleFusionDecoderPipeline::EnsembleFusionDecoderPipeline(
     compute_uncertainty_ = cfg.compute_uncertainty;
     driver_cols_         = manifest.driver_columns;
     driver_source_       = manifest.driver_source;
+    grid_shape_          = manifest.grid;
+    manifest_kind_          = manifest.kind;
 
     io::Stats stats_ts = io::Stats::load(dir / "stats_ts.bin");
     ts_norm_ = std::make_unique<io::FeatureNormalizer>(stats_ts, K_);
@@ -81,7 +85,7 @@ EnsembleFusionDecoderPipeline::EnsembleFusionDecoderPipeline(
 
     if (dd != static_cast<int>(manifest.driver_columns.size()))
         throw std::runtime_error(
-            "EnsembleFusionDecoderPipeline: manifest has " +
+            "StackedEnsemblePipeline: manifest has " +
             std::to_string(manifest.driver_columns.size()) +
             " driver_columns but stats_ts.bin expects driver_dim=" +
             std::to_string(dd));
@@ -104,23 +108,23 @@ EnsembleFusionDecoderPipeline::EnsembleFusionDecoderPipeline(
 // Constructor helpers
 // ---------------------------------------------------------------------------
 
-void EnsembleFusionDecoderPipeline::load_ic_table(const fs::path& dir) {
+void StackedEnsemblePipeline::load_ic_table(const fs::path& dir) {
     log_("Loading IC table\xe2\x80\xa6");
     ic_table_ = std::make_unique<io::ICTable>(io::ICTable::load_from_dir(dir));
     if (ic_table_->latent_dim() != K_)
         throw std::runtime_error(
-            "EnsembleFusionDecoderPipeline: manifest latent_dim=" +
+            "StackedEnsemblePipeline: manifest latent_dim=" +
             std::to_string(K_) + " does not match IC table K=" +
             std::to_string(ic_table_->latent_dim()));
 }
 
-void EnsembleFusionDecoderPipeline::load_sw_db(const Config& cfg) {
+void StackedEnsemblePipeline::load_sw_db(const Config& cfg) {
     log_("Loading space-weather database\xe2\x80\xa6");
     fs::path path = cfg.driver_path;
     if (path.empty()) {
         if (driver_source_.empty())
             throw std::runtime_error(
-                "EnsembleFusionDecoderPipeline: no driver_path set and manifest "
+                "StackedEnsemblePipeline: no driver_path set and manifest "
                 "has no 'driver_source'; cannot locate driver data.");
         fs::path cache_dir = cfg.cache_dir.empty()
             ? platform::default_cache_dir()
@@ -132,10 +136,10 @@ void EnsembleFusionDecoderPipeline::load_sw_db(const Config& cfg) {
         io::SpaceWeatherDB::from_file(path));
 }
 
-void EnsembleFusionDecoderPipeline::load_base_models(
+void StackedEnsemblePipeline::load_base_models(
     const Config& cfg, const io::ModelManifest& manifest, const fs::path& dir)
 {
-    const auto& spec = *manifest.ensemble_fusion_decoder;
+    const auto& spec = *manifest.stacked_ensemble;
     log_("Loading " + std::to_string(M_) + " base models\xe2\x80\xa6");
     base_models_.reserve(M_);
     for (const auto& bm : spec.base_models) {
@@ -148,11 +152,11 @@ void EnsembleFusionDecoderPipeline::load_base_models(
     }
 }
 
-void EnsembleFusionDecoderPipeline::load_meta_model(
+void StackedEnsemblePipeline::load_meta_model(
     const Config& cfg, const io::ModelManifest& manifest,
     const fs::path& dir, int D)
 {
-    const auto& spec = *manifest.ensemble_fusion_decoder;
+    const auto& spec = *manifest.stacked_ensemble;
     int meta_threads = cfg.intra_threads_meta;
     if (meta_threads <= 0)
         meta_threads = static_cast<int>(std::thread::hardware_concurrency());
@@ -166,10 +170,10 @@ void EnsembleFusionDecoderPipeline::load_meta_model(
         K_, S_, D, M_);
 }
 
-void EnsembleFusionDecoderPipeline::load_decoder_stages(
+void StackedEnsemblePipeline::load_decoder_stages(
     const Config& cfg, const io::ModelManifest& manifest, const fs::path& dir)
 {
-    const auto& spec = *manifest.ensemble_fusion_decoder;
+    const auto& spec = *manifest.stacked_ensemble;
     int dec_threads = cfg.intra_threads_decoder;
     if (dec_threads <= 0)
         dec_threads = static_cast<int>(std::thread::hardware_concurrency());
@@ -218,7 +222,7 @@ void EnsembleFusionDecoderPipeline::load_decoder_stages(
         stage.denorm    = std::make_unique<io::CAEDenormalizer>(stats_cae);
         stage.decoder   = std::make_unique<LatentDecoder>(
             *stage.model, *stage.denorm, DECODE_BATCH_,
-            d.alt_end - d.alt_start);
+            d.alt_end - d.alt_start, grid_shape_.n_lst, grid_shape_.n_lat);
     }
 }
 
@@ -226,7 +230,7 @@ void EnsembleFusionDecoderPipeline::load_decoder_stages(
 // Sequence building (formerly SequenceBuilder)
 // ---------------------------------------------------------------------------
 
-std::vector<float> EnsembleFusionDecoderPipeline::build_X_init_norm(
+std::vector<float> StackedEnsemblePipeline::build_X_init_norm(
     const std::vector<io::DriverRow>& hist_rows) const
 {
     const int K  = K_;
@@ -249,7 +253,7 @@ std::vector<float> EnsembleFusionDecoderPipeline::build_X_init_norm(
     return X;
 }
 
-std::vector<float> EnsembleFusionDecoderPipeline::build_x_chunk(
+std::vector<float> StackedEnsemblePipeline::build_x_chunk(
     const std::vector<float>&        X_init_norm,
     const std::vector<io::DriverRow>& fcast_rows,
     int                              n_windows) const
@@ -282,7 +286,7 @@ std::vector<float> EnsembleFusionDecoderPipeline::build_x_chunk(
 // run() phases
 // ---------------------------------------------------------------------------
 
-std::vector<float> EnsembleFusionDecoderPipeline::run_base_rollout(
+std::vector<float> StackedEnsemblePipeline::run_base_rollout(
     const std::vector<float>& x_chunk, int H)
 {
     const int K = K_;
@@ -301,8 +305,8 @@ std::vector<float> EnsembleFusionDecoderPipeline::run_base_rollout(
     return base_latents;
 }
 
-EnsembleFusionDecoderPipeline::MeanLatents
-EnsembleFusionDecoderPipeline::compute_mean_latents(
+StackedEnsemblePipeline::MeanLatents
+StackedEnsemblePipeline::compute_mean_latents(
     const std::vector<float>& x_chunk,
     const std::vector<float>& base_latents_norm,
     const std::vector<float>& X_init, int H) const
@@ -331,88 +335,14 @@ EnsembleFusionDecoderPipeline::compute_mean_latents(
     return {std::move(mu_lat), std::move(init_lat)};
 }
 
-EnsembleFusionDecoderPipeline::GridArrays
-EnsembleFusionDecoderPipeline::decode_direct(
-    const std::vector<float>& mu_lat, int H_lat)
-{
-    std::vector<float> all_density(static_cast<size_t>(H_lat) * GRID_VOXELS, 0.0f);
-    for (auto& stage : decoder_stages_) {
-        auto stage_dens = stage.decoder->decode(mu_lat, H_lat, K_);
-        stitch_altitude_range(all_density.data(), stage_dens.data(), H_lat,
-                              stage.alt_start, stage.alt_end);
-    }
-
-    std::vector<float> density(all_density.begin() + GRID_VOXELS, all_density.end());
-    std::vector<float> uncertainty(static_cast<size_t>(H_lat - 1) * GRID_VOXELS, 0.0f);
-    return {std::move(density), std::move(uncertainty)};
-}
-
-EnsembleFusionDecoderPipeline::GridArrays
-EnsembleFusionDecoderPipeline::decode_with_uncertainty(
-    const std::vector<float>& mu_lat,
-    std::vector<float>        base_latents_norm,
-    const std::vector<float>& init_lat, int H_lat)
-{
-    const int M = M_;
-    const int T = H_lat - 1;
-
-    ts_norm_->denorm_latents_block(base_latents_norm.data(), M * T);
-
-    auto ut = ut_sigma_points(mu_lat, base_latents_norm, init_lat, M, K_, H_lat);
-    const int N_SIG = ut.N_SIG;
-
-    std::vector<float> dens_sigmas(
-        static_cast<size_t>(H_lat) * N_SIG * GRID_VOXELS, 0.0f);
-    for (auto& stage : decoder_stages_) {
-        auto stage_dens = stage.decoder->decode(ut.sigma_lat, H_lat * N_SIG, K_);
-        stitch_altitude_range(dens_sigmas.data(), stage_dens.data(),
-                              H_lat * N_SIG, stage.alt_start, stage.alt_end);
-    }
-
-    const size_t lat_voxels = static_cast<size_t>(H_lat) * GRID_VOXELS;
-    std::vector<float> density_mean(lat_voxels, 0.0f);
-    for (int t = 0; t < H_lat; ++t)
-        for (int sig = 0; sig < N_SIG; ++sig) {
-            const float* src = dens_sigmas.data() +
-                               (static_cast<size_t>(t) * N_SIG + sig) * GRID_VOXELS;
-            float* dst = density_mean.data() + static_cast<size_t>(t) * GRID_VOXELS;
-            const float w = ut.Wm[sig];
-            for (int v = 0; v < GRID_VOXELS; ++v)
-                dst[v] += w * src[v];
-        }
-
-    std::vector<float> uncertainty(lat_voxels, 0.0f);
-    for (int t = 0; t < H_lat; ++t)
-        for (int sig = 0; sig < N_SIG; ++sig) {
-            const float* src = dens_sigmas.data() +
-                               (static_cast<size_t>(t) * N_SIG + sig) * GRID_VOXELS;
-            const float* mu  = density_mean.data() +
-                               static_cast<size_t>(t) * GRID_VOXELS;
-            float* dst = uncertainty.data() + static_cast<size_t>(t) * GRID_VOXELS;
-            const float w = ut.Wc[sig];
-            for (int v = 0; v < GRID_VOXELS; ++v) {
-                float d = src[v] - mu[v];
-                dst[v] += w * d * d;
-            }
-        }
-    for (float& u : uncertainty)
-        u = std::sqrt(std::max(u, 0.0f));
-
-    density_mean.erase(density_mean.begin(), density_mean.begin() + GRID_VOXELS);
-    uncertainty.erase(uncertainty.begin(), uncertainty.begin() + GRID_VOXELS);
-
-    return {std::move(density_mean), std::move(uncertainty)};
-}
-
-// ---------------------------------------------------------------------------
-// run()
-// ---------------------------------------------------------------------------
-
-ForecastGrid EnsembleFusionDecoderPipeline::run(
-    const std::string& start_iso, int horizon)
+// Rollout+fusion stay whole-horizon (cheap, latent-space); only decode is chunked.
+void StackedEnsemblePipeline::run_streaming(
+    const std::string& start_iso, int horizon, int chunk_hours,
+    const GridChunkSink& sink, const LatentSink& latent_sink)
 {
     const int H = horizon;
     const int S = S_;
+    if (chunk_hours <= 0) chunk_hours = H;
 
     std::vector<io::DriverRow> all_rows =
         io::DriverWindowBuilder::build(*sw_db_, start_iso, H + 1, S);
@@ -424,24 +354,109 @@ ForecastGrid EnsembleFusionDecoderPipeline::run(
 
     auto X_init  = build_X_init_norm(hist_rows);
     auto x_chunk = build_x_chunk(X_init, fcast_rows, H + 1);
-
     auto base_latents = run_base_rollout(x_chunk, H);
-
     auto [mu_lat, init_lat] = compute_mean_latents(x_chunk, base_latents, X_init, H);
 
-    const int H_lat = H + 1;
-    auto [density, uncertainty] = compute_uncertainty_
-        ? decode_with_uncertainty(mu_lat, std::move(base_latents), init_lat, H_lat)
-        : decode_direct(mu_lat, H_lat);
+    // mu_lat's IC row (index 0) is dropped, matching the sink calls below.
+    if (latent_sink)
+        latent_sink(std::span(mu_lat).subspan(
+            static_cast<std::size_t>(K_), static_cast<std::size_t>(H) * K_));
 
-    ForecastGrid grid;
-    grid.H           = H;
-    grid.density     = std::move(density);
-    grid.uncertainty = std::move(uncertainty);
-    grid.times.reserve(H);
-    for (int t = 1; t <= H; ++t)
-        grid.times.push_back(fcast_rows[t].tp);
-    return grid;
+    const int H_lat  = H + 1;
+    const int voxels = grid_shape_.voxels();
+
+    std::vector<std::int64_t> times(H);
+    for (int t = 1; t <= H; ++t) times[t - 1] = fcast_rows[t].tp;
+
+    if (compute_uncertainty_) {
+        const int M = M_;
+        ts_norm_->denorm_latents_block(base_latents.data(), M * H);
+
+        auto ut = ut_sigma_points(mu_lat, base_latents, init_lat, M, K_, H_lat);
+        const int N_SIG = ut.N_SIG;
+
+        for (int t_lat = 0; t_lat < H_lat; t_lat += chunk_hours) {
+            const int count_lat = std::min(chunk_hours, H_lat - t_lat);
+            auto sigma_slice = std::span(ut.sigma_lat)
+                .subspan(static_cast<std::size_t>(t_lat) * N_SIG * K_,
+                         static_cast<std::size_t>(count_lat) * N_SIG * K_);
+
+            std::vector<float> dens_sigmas(static_cast<std::size_t>(count_lat) * N_SIG * voxels, 0.0f);
+            for (auto& stage : decoder_stages_) {
+                auto stage_dens = stage.decoder->decode(sigma_slice, count_lat * N_SIG, K_);
+                stitch_altitude_range(dens_sigmas.data(), stage_dens.data(), count_lat * N_SIG,
+                                      stage.alt_start, stage.alt_end, grid_shape_);
+            }
+
+            const std::size_t local_voxels = static_cast<std::size_t>(count_lat) * voxels;
+            std::vector<float> density_mean(local_voxels, 0.0f);
+            for (int lt = 0; lt < count_lat; ++lt)
+                for (int sig = 0; sig < N_SIG; ++sig) {
+                    const float* src = dens_sigmas.data() +
+                                       (static_cast<std::size_t>(lt) * N_SIG + sig) * voxels;
+                    float* dst = density_mean.data() + static_cast<std::size_t>(lt) * voxels;
+                    const float w = ut.Wm[sig];
+                    for (int v = 0; v < voxels; ++v)
+                        dst[v] += w * src[v];
+                }
+
+            std::vector<float> uncertainty(local_voxels, 0.0f);
+            for (int lt = 0; lt < count_lat; ++lt)
+                for (int sig = 0; sig < N_SIG; ++sig) {
+                    const float* src = dens_sigmas.data() +
+                                       (static_cast<std::size_t>(lt) * N_SIG + sig) * voxels;
+                    const float* mu  = density_mean.data() +
+                                       static_cast<std::size_t>(lt) * voxels;
+                    float* dst = uncertainty.data() + static_cast<std::size_t>(lt) * voxels;
+                    const float w = ut.Wc[sig];
+                    for (int v = 0; v < voxels; ++v) {
+                        float d = src[v] - mu[v];
+                        dst[v] += w * d * d;
+                    }
+                }
+            for (float& u : uncertainty)
+                u = std::sqrt(std::max(u, 0.0f));
+
+            // local_start drops the IC row from the first chunk only.
+            const int local_start = (t_lat == 0) ? 1 : 0;
+            const int t_offset    = t_lat - 1 + local_start;
+            const int count_out   = count_lat - local_start;
+            if (count_out > 0)
+                sink(t_offset,
+                     std::span(times).subspan(static_cast<std::size_t>(t_offset),
+                                              static_cast<std::size_t>(count_out)),
+                     std::span(density_mean).subspan(static_cast<std::size_t>(local_start) * voxels,
+                                                     static_cast<std::size_t>(count_out) * voxels),
+                     std::span(uncertainty).subspan(static_cast<std::size_t>(local_start) * voxels,
+                                                    static_cast<std::size_t>(count_out) * voxels));
+        }
+    } else {
+        for (int t_lat = 0; t_lat < H_lat; t_lat += chunk_hours) {
+            const int count_lat = std::min(chunk_hours, H_lat - t_lat);
+            auto mu_slice = std::span(mu_lat)
+                .subspan(static_cast<std::size_t>(t_lat) * K_, static_cast<std::size_t>(count_lat) * K_);
+
+            std::vector<float> density(static_cast<std::size_t>(count_lat) * voxels, 0.0f);
+            for (auto& stage : decoder_stages_) {
+                auto stage_dens = stage.decoder->decode(mu_slice, count_lat, K_);
+                stitch_altitude_range(density.data(), stage_dens.data(), count_lat,
+                                      stage.alt_start, stage.alt_end, grid_shape_);
+            }
+            std::vector<float> uncertainty(static_cast<std::size_t>(count_lat) * voxels, 0.0f);
+
+            const int local_start = (t_lat == 0) ? 1 : 0;
+            const int t_offset    = t_lat - 1 + local_start;
+            const int count_out   = count_lat - local_start;
+            if (count_out > 0)
+                sink(t_offset,
+                     std::span(times).subspan(static_cast<std::size_t>(t_offset),
+                                              static_cast<std::size_t>(count_out)),
+                     std::span(density).subspan(static_cast<std::size_t>(local_start) * voxels,
+                                                static_cast<std::size_t>(count_out) * voxels),
+                     std::span(uncertainty).subspan(static_cast<std::size_t>(local_start) * voxels,
+                                                    static_cast<std::size_t>(count_out) * voxels));
+        }
+    }
 }
 
 } // namespace rope::forecast

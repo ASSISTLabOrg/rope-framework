@@ -9,7 +9,7 @@
 
 # Directory produced by export_models.py (contains *.onnx, *.bin,
 # driver_config.json, ic_config.json, ic_table.icbin).
-exported_dir = ../data/models/tiegcm-lstm-v1
+exported_dir = ../data/models/tiegcm-aurora-v1
 
 # Explicit driver data file (.swbin or .csv).  When set, bypasses the
 # cache manager entirely — no network access or staleness check.
@@ -65,15 +65,6 @@ device = @ROPE_DECODER_DEVICE@
 
 
 # ---------------------------------------------------------------------------
-[server]
-# ---------------------------------------------------------------------------
-
-# Shut down automatically after this many seconds with no requests received.
-# Set to 0 to disable the idle timeout.
-idle_timeout_seconds = 1800
-
-
-# ---------------------------------------------------------------------------
 [forecast]
 # ---------------------------------------------------------------------------
 
@@ -81,3 +72,7 @@ idle_timeout_seconds = 1800
 # The decoder runs once on the meta-model mean latents; uncertainty is set
 # to 0.  Substantially faster when uncertainty estimates are not needed.
 compute_uncertainty = true
+
+# Bounds peak memory during decode (forecast-hours held at once). <= 0 = whole horizon.
+# See docs/pipeline.md for the cost formula.
+decode_chunk_hours = 72

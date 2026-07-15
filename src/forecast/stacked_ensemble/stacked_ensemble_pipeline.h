@@ -6,7 +6,7 @@
 #include "rope/io/ic_table.h"
 #include "rope/io/stats.h"
 
-#include "model_interface.h"
+#include "backends/model_interface.h"
 #include "ensemble_fuser.h"
 #include "latent_decoder.h"
 #include "rollout_strategy.h"
@@ -19,15 +19,21 @@
 
 namespace rope::forecast {
 
-class EnsembleFusionDecoderPipeline : public Pipeline {
+class StackedEnsemblePipeline : public Pipeline {
 public:
-    EnsembleFusionDecoderPipeline(const Config& cfg, const io::ModelManifest& manifest);
-    ForecastGrid run(const std::string& start_iso, int horizon) override;
+    StackedEnsemblePipeline(const Config& cfg, const io::ModelManifest& manifest);
+    void run_streaming(const std::string& start_iso, int horizon, int chunk_hours,
+                       const GridChunkSink& sink, const LatentSink& latent_sink) override;
+    GridSpec grid_shape() const override { return grid_shape_; }
+    std::string model_kind() const override { return manifest_kind_; }
+    int latent_dim() const override { return K_; }
 
 private:
     // --- Scalars / config ---
     int  K_, S_, M_, DECODE_BATCH_;
     bool compute_uncertainty_{true};
+    GridSpec grid_shape_;
+    std::string manifest_kind_;
 
     std::vector<std::string>               driver_cols_;
     std::string                            driver_source_;
@@ -81,17 +87,6 @@ private:
         const std::vector<float>& x_chunk,
         const std::vector<float>& base_latents_norm,
         const std::vector<float>& X_init, int H) const;
-
-    struct GridArrays {
-        std::vector<float> density;
-        std::vector<float> uncertainty;
-    };
-    GridArrays decode_direct(
-        const std::vector<float>& mu_lat, int H_lat);
-    GridArrays decode_with_uncertainty(
-        const std::vector<float>& mu_lat,
-        std::vector<float>        base_latents_norm,  // by value — denormed in-place
-        const std::vector<float>& init_lat, int H_lat);
 };
 
 } // namespace rope::forecast

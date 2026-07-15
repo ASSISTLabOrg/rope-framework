@@ -1,11 +1,9 @@
 // POSIX platform implementation (Linux + macOS).
 #include "rope/core/platform.h"
 
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <sys/un.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
-#include <spawn.h>
 #include <fcntl.h>
 #include <cerrno>
 #include <climits>
@@ -19,151 +17,7 @@
 #  include <mach-o/dyld.h>
 #endif
 
-extern char** environ;
-
 namespace rope::platform {
-
-// ---------------------------------------------------------------------------
-// IpcSocket — POSIX file descriptor
-// ---------------------------------------------------------------------------
-class PosixSocket final : public IpcSocket {
-public:
-    explicit PosixSocket(int fd) : fd_(fd) {}
-    ~PosixSocket() override { if (fd_ >= 0) ::close(fd_); }
-
-    void send_all(const void* buf, std::size_t n) override {
-        const auto* p = static_cast<const char*>(buf);
-        while (n > 0) {
-            ssize_t sent = ::send(fd_, p, n, MSG_NOSIGNAL);
-            if (sent < 0)
-                throw std::runtime_error(
-                    std::string("IpcSocket::send_all: ") + std::strerror(errno));
-            p += sent;
-            n -= static_cast<std::size_t>(sent);
-        }
-    }
-
-    void recv_all(void* buf, std::size_t n) override {
-        auto* p = static_cast<char*>(buf);
-        while (n > 0) {
-            ssize_t got = ::recv(fd_, p, n, 0);
-            if (got <= 0) {
-                if (got == 0)
-                    throw std::runtime_error("IpcSocket::recv_all: connection closed");
-                throw std::runtime_error(
-                    std::string("IpcSocket::recv_all: ") + std::strerror(errno));
-            }
-            p += got;
-            n -= static_cast<std::size_t>(got);
-        }
-    }
-
-private:
-    int fd_;
-};
-
-// ---------------------------------------------------------------------------
-// ServerSocket — POSIX bind/listen/accept
-// ---------------------------------------------------------------------------
-class PosixServerSocket final : public ServerSocket {
-public:
-    PosixServerSocket(int fd, std::filesystem::path path)
-        : fd_(fd), path_(std::move(path)) {}
-
-    ~PosixServerSocket() override {
-        if (fd_ >= 0) {
-            ::close(fd_);
-            std::error_code ec;
-            std::filesystem::remove(path_, ec);
-        }
-    }
-
-    std::unique_ptr<IpcSocket> accept(const std::atomic<bool>& running) override {
-        while (running) {
-            fd_set rfds;
-            FD_ZERO(&rfds);
-            FD_SET(fd_, &rfds);
-            timeval tv{1, 0};  // 1-second timeout to check stop flag
-            int r = ::select(fd_ + 1, &rfds, nullptr, nullptr, &tv);
-            if (r < 0) {
-                if (errno == EINTR) continue;
-                throw std::runtime_error(
-                    std::string("ServerSocket::accept: select: ") + std::strerror(errno));
-            }
-            if (r == 0) continue;  // timeout — loop to recheck running flag
-
-            int client = ::accept(fd_, nullptr, nullptr);
-            if (client < 0) {
-                if (errno == EINTR) continue;
-                throw std::runtime_error(
-                    std::string("ServerSocket::accept: accept: ") + std::strerror(errno));
-            }
-            return std::make_unique<PosixSocket>(client);
-        }
-        return nullptr;
-    }
-
-private:
-    int                   fd_;
-    std::filesystem::path path_;
-};
-
-std::unique_ptr<ServerSocket> ServerSocket::bind(const std::filesystem::path& path) {
-    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0)
-        throw std::runtime_error(
-            std::string("ServerSocket::bind: socket(): ") + std::strerror(errno));
-
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    const std::string s = path.string();
-    if (s.size() >= sizeof(addr.sun_path)) {
-        ::close(fd);
-        throw std::runtime_error("ServerSocket::bind: socket path too long");
-    }
-    std::strncpy(addr.sun_path, s.c_str(), sizeof(addr.sun_path) - 1);
-
-    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        int e = errno;
-        ::close(fd);
-        throw std::runtime_error(
-            std::string("ServerSocket::bind: bind(): ") + std::strerror(e));
-    }
-    if (::listen(fd, 4) < 0) {
-        int e = errno;
-        ::close(fd);
-        throw std::runtime_error(
-            std::string("ServerSocket::bind: listen(): ") + std::strerror(e));
-    }
-    return std::make_unique<PosixServerSocket>(fd, path);
-}
-
-// ---------------------------------------------------------------------------
-// IpcSocket::connect
-// ---------------------------------------------------------------------------
-std::unique_ptr<IpcSocket> IpcSocket::connect(const std::filesystem::path& path) {
-    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0)
-        throw std::runtime_error(
-            std::string("IpcSocket::connect: socket(): ") + std::strerror(errno));
-
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    const std::string s = path.string();
-    if (s.size() >= sizeof(addr.sun_path)) {
-        ::close(fd);
-        throw std::runtime_error("IpcSocket::connect: socket path too long");
-    }
-    std::strncpy(addr.sun_path, s.c_str(), sizeof(addr.sun_path) - 1);
-
-    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        int e = errno;
-        ::close(fd);
-        throw std::runtime_error(
-            std::string("IpcSocket::connect: connect(): ") + std::strerror(e));
-    }
-    return std::make_unique<PosixSocket>(fd);
-}
 
 // ---------------------------------------------------------------------------
 // exe_path
@@ -196,62 +50,84 @@ std::filesystem::path default_cache_dir() {
 }
 
 // ---------------------------------------------------------------------------
-// default_socket_path
+// default_forecast_cache_path
 // ---------------------------------------------------------------------------
-std::filesystem::path default_socket_path() {
-    if (const char* xdg = std::getenv("XDG_RUNTIME_DIR")) {
-        return std::filesystem::path{xdg} / "rope.sock";
-    }
-    // Fallback: /tmp/rope-<uid>.sock
-    std::string path = "/tmp/rope-" + std::to_string(::getuid()) + ".sock";
-    return std::filesystem::path{path};
+std::filesystem::path default_forecast_cache_path() {
+    if (const char* xdg = std::getenv("XDG_CACHE_HOME"))
+        return std::filesystem::path{xdg} / "rope" / "forecast_grid.bin";
+    if (const char* home = std::getenv("HOME"))
+        return std::filesystem::path{home} / ".cache" / "rope" / "forecast_grid.bin";
+    return std::filesystem::temp_directory_path() / "rope" / "forecast_grid.bin";
 }
 
 // ---------------------------------------------------------------------------
-// spawn_server
+// MappedFile — POSIX mmap
 // ---------------------------------------------------------------------------
-void spawn_server(const std::filesystem::path& exe,
-                  const std::filesystem::path& socket_path,
-                  const std::filesystem::path& config_path) {
-    std::string exe_s    = exe.string();
-    std::string sock_s   = socket_path.string();
-    std::string config_s = config_path.string();
+struct MappedFile::Impl {
+    int fd = -1;
+    void* addr = nullptr;
+    std::size_t len = 0;
 
-    // Build null-terminated argv
-    char* argv[] = {
-        exe_s.data(),
-        const_cast<char*>("--serve"),
-        const_cast<char*>("--socket-path"),
-        sock_s.data(),
-        const_cast<char*>("--config-path"),
-        config_s.data(),
-        nullptr
-    };
+    ~Impl() {
+        if (addr && addr != MAP_FAILED) ::munmap(addr, len);
+        if (fd >= 0) ::close(fd);
+    }
+};
 
-    // Redirect the server's stdin/stdout/stderr to /dev/null so it does not
-    // inherit any captured pipes from the caller.  Without this,
-    // subprocess.run(capture_output=True) in Python hangs: the server holds
-    // the write end of the captured pipe open indefinitely.
-    posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_addopen(&fa, STDIN_FILENO,  "/dev/null", O_RDONLY, 0);
-    posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
-    posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+MappedFile::MappedFile() = default;
 
-    posix_spawnattr_t attr;
-    posix_spawnattr_init(&attr);
-    // Request a new process group so the child survives the parent exiting
-    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
-    posix_spawnattr_setpgroup(&attr, 0);
+MappedFile::MappedFile(MappedFile&& other) noexcept
+    : impl_(std::move(other.impl_)), data_(other.data_), size_(other.size_) {
+    other.data_ = nullptr;
+    other.size_ = 0;
+}
+MappedFile& MappedFile::operator=(MappedFile&& other) noexcept {
+    if (this != &other) {
+        impl_ = std::move(other.impl_);
+        data_ = other.data_;
+        size_ = other.size_;
+        other.data_ = nullptr;
+        other.size_ = 0;
+    }
+    return *this;
+}
+MappedFile::~MappedFile() = default;
 
-    pid_t pid;
-    int rc = posix_spawn(&pid, exe_s.c_str(), &fa, &attr, argv, environ);
-    posix_spawnattr_destroy(&attr);
-    posix_spawn_file_actions_destroy(&fa);
-
-    if (rc != 0)
+MappedFile MappedFile::open_readonly(const std::filesystem::path& path) {
+    int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0)
         throw std::runtime_error(
-            std::string("spawn_server: posix_spawn failed: ") + std::strerror(rc));
+            std::string("MappedFile::open_readonly: open(): ") + std::strerror(errno));
+
+    struct stat st{};
+    if (::fstat(fd, &st) < 0) {
+        int e = errno;
+        ::close(fd);
+        throw std::runtime_error(
+            std::string("MappedFile::open_readonly: fstat(): ") + std::strerror(e));
+    }
+    auto len = static_cast<std::size_t>(st.st_size);
+    if (len == 0) {
+        ::close(fd);
+        throw std::runtime_error("MappedFile::open_readonly: file is empty: " + path.string());
+    }
+
+    void* addr = ::mmap(nullptr, len, PROT_READ, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED) {
+        int e = errno;
+        ::close(fd);
+        throw std::runtime_error(
+            std::string("MappedFile::open_readonly: mmap(): ") + std::strerror(e));
+    }
+
+    MappedFile mf;
+    mf.impl_ = std::make_unique<Impl>();
+    mf.impl_->fd   = fd;
+    mf.impl_->addr = addr;
+    mf.impl_->len  = len;
+    mf.data_ = static_cast<const std::byte*>(addr);
+    mf.size_ = len;
+    return mf;
 }
 
 } // namespace rope::platform

@@ -1,10 +1,10 @@
 #pragma once
 // GridInterpolator — spatiotemporal density and uncertainty query on a ForecastGrid.
 //
-// Grid axes (fixed, matching COAE output):
-//   LST : linspace(0, 23.667, 72)    [hours, periodic]
-//   lat : linspace(-87.5, 87.5, 36)  [degrees]
-//   alt : linspace(100, 980, 45)     [km]
+// Grid axes are per-model, declared in model_manifest.json (rope::GridSpec)
+// and carried on the queried ForecastGrid — not fixed constants. LST is
+// always uniform over the full 24h cycle (n_lst bins); lat and alt are
+// uniform over [lat_min_deg, lat_max_deg] / [alt_min_km, alt_max_km].
 //
 // Spatial interpolation is performed in log10 space, then exponentiated.
 // Both density and uncertainty use the same spatial weights.
@@ -41,11 +41,21 @@ struct InterpolationResult {
 };
 
 // ---------------------------------------------------------------------------
-// GridInterpolator
+// GridInterpolator<Grid> — templated (not virtual) so both the vector-backed
+// ForecastGrid and the mmap-backed MappedForecastGrid (rope/io/mapped_forecast_grid.h)
+// can be interpolated through identical code with zero dispatch overhead —
+// query_hold/query_interp is a hot path (called once per orbit-integration
+// timestep), and CLAUDE.md says to avoid virtual dispatch there.
+//
+// Grid must expose: `GridSpec shape`, `int H`, `std::vector<std::int64_t> times`,
+// `const float* density_at(int t) const`, `const float* uncertainty_at(int t) const`
+// — the exact shape ForecastGrid already has. Explicitly instantiated for
+// both grid types in grid_interpolator.cpp.
 // ---------------------------------------------------------------------------
+template <class Grid>
 class GridInterpolator {
 public:
-    explicit GridInterpolator(const ForecastGrid& grid);
+    explicit GridInterpolator(const Grid& grid);
 
     TimePoint time_min() const noexcept { return times_.front(); }
     TimePoint time_max() const noexcept { return times_.back();  }
@@ -59,10 +69,11 @@ public:
         TimePoint time_unix, double lst, double lat, double alt_km) const;
 
 private:
-    const ForecastGrid&    grid_;
+    const Grid&            grid_;
     std::vector<TimePoint> times_;
     int                    H_;
     std::vector<double>    lst_ax_, lat_ax_, alt_ax_;
+    double                 lst_step_, lat_step_, alt_step_;
 
     void check_spatial(double lst, double lat, double alt_km) const;
     void check_time(TimePoint tp) const;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 4.2)
-project(ROPE VERSION 0.2.0 LANGUAGES CXX C)
+project(ROPE VERSION 0.4.0 LANGUAGES CXX C)
 
 # Allow CI to inject the version from the git tag: -DROPE_RELEASE_VERSION=x.y.z
 # (Cannot use ROPE_VERSION — project() sets that to the hardcoded version above.)
@@ -44,6 +44,7 @@ endif()
 # ---------------------------------------------------------------------------
 option(ROPE_USE_LIBTORCH  "Build the TorchScript / LibTorch backend" ON)
 option(ROPE_BUILD_TESTS   "Build and register unit tests (CTest)"    OFF)
+option(ROPE_USE_ZARR      "Build 'rope forecast --zarr' export support (needs zlib)" ON)
 
 # ---------------------------------------------------------------------------
 # External dependencies (nlohmann/json, CLI11) via FetchContent
@@ -108,6 +109,21 @@ endif()
 find_package(OpenMP)
 
 # ---------------------------------------------------------------------------
+# zlib — used only by ForecastZarrWriter's chunk compressor (io/forecast_zarr_writer.cpp).
+# Unlike NetCDF4/HDF5 (the format this replaced), zlib is a single, tiny,
+# near-universal system library — find_package via CMake's built-in FindZLIB
+# rather than a FetchContent source build, matching how this project treats
+# other omnipresent system facilities.
+# ---------------------------------------------------------------------------
+if(ROPE_USE_ZARR)
+    find_package(ZLIB QUIET)
+    if(NOT ZLIB_FOUND)
+        message(STATUS "zlib not found — ROPE_USE_ZARR requested but disabled")
+        set(ROPE_USE_ZARR OFF)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Compiler warnings and release optimisations
 # ---------------------------------------------------------------------------
 add_library(rope_compile_opts INTERFACE)
@@ -129,7 +145,7 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN YES)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ---------------------------------------------------------------------------
-# rope_core — platform layer (types, datetime, IpcSocket, spawn)
+# rope_core — platform layer (paths, memory-mapped files), datetime, version
 # ---------------------------------------------------------------------------
 add_library(rope_core STATIC)
 
@@ -148,9 +164,6 @@ target_include_directories(rope_core
 target_link_libraries(rope_core
     PUBLIC  rope_compile_opts
 )
-if(WIN32)
-    target_link_libraries(rope_core PUBLIC ws2_32)
-endif()
 
 # ---------------------------------------------------------------------------
 # rope_io — CSV parsing, config, stats, driver DB, IC table
@@ -164,11 +177,21 @@ add_library(rope_io STATIC
     src/io/ic_table.cpp
     src/io/ic_bin.cpp
     src/io/model_manifest.cpp
+    src/io/forecast_grid_bin.cpp
+    src/io/mapped_forecast_grid.cpp
 )
 target_link_libraries(rope_io
     PUBLIC  rope_core
     PRIVATE nlohmann_json::nlohmann_json
 )
+if(ROPE_USE_ZARR)
+    target_sources(rope_io PRIVATE src/io/forecast_zarr_writer.cpp)
+    target_link_libraries(rope_io PRIVATE ZLIB::ZLIB)
+    target_compile_definitions(rope_io PUBLIC ROPE_HAS_ZARR)
+    message(STATUS "Zarr forecast export ('rope forecast --zarr'): enabled")
+else()
+    message(STATUS "Zarr forecast export ('rope forecast --zarr'): disabled")
+endif()
 
 # ---------------------------------------------------------------------------
 # rope_interpolate — in-memory grid interpolation
@@ -176,22 +199,7 @@ target_link_libraries(rope_io
 add_library(rope_interpolate STATIC
     src/interpolate/grid_interpolator.cpp
 )
-target_link_libraries(rope_interpolate PUBLIC rope_core)
-
-# ---------------------------------------------------------------------------
-# rope_client — IPC socket transport + typed request/response API
-# ---------------------------------------------------------------------------
-add_library(rope_client STATIC
-    src/client/client.cpp
-)
-target_include_directories(rope_client
-    PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/client>
-            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-)
-target_link_libraries(rope_client
-    PUBLIC  rope_core
-    PRIVATE nlohmann_json::nlohmann_json
-)
+target_link_libraries(rope_interpolate PUBLIC rope_core rope_io)
 
 # ---------------------------------------------------------------------------
 # rope_forecast — full inference pipeline
@@ -200,10 +208,11 @@ if(ORT_INC AND ORT_LIB)
     add_library(rope_forecast STATIC
         src/forecast/pipeline.cpp
         src/forecast/pipeline_registry.cpp
-        src/forecast/ensemble_fusion_decoder_pipeline.cpp
-        src/forecast/runtime_compat.cpp
-        src/forecast/model_factory.cpp
-        src/forecast/unscented_transform.cpp
+        src/forecast/config_builder.cpp
+        src/forecast/backends/runtime_compat.cpp
+        src/forecast/backends/model_factory.cpp
+        src/forecast/stacked_ensemble/stacked_ensemble_pipeline.cpp
+        src/forecast/stacked_ensemble/unscented_transform.cpp
     )
     target_include_directories(rope_forecast
         PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -230,27 +239,6 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# rope_server — request router, cache, and pipeline integration
-# ---------------------------------------------------------------------------
-add_library(rope_server STATIC
-    src/server/server.cpp
-)
-target_include_directories(rope_server
-    PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/server>
-            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-)
-target_link_libraries(rope_server
-    PUBLIC  rope_core
-            rope_interpolate
-            rope_io
-    PRIVATE nlohmann_json::nlohmann_json
-)
-if(TARGET rope_forecast)
-    target_link_libraries(rope_server PRIVATE rope_forecast)
-    target_compile_definitions(rope_server PRIVATE ROPE_HAS_FORECAST)
-endif()
-
-# ---------------------------------------------------------------------------
 # rope (shared library) — C API
 # ---------------------------------------------------------------------------
 add_library(rope SHARED
@@ -263,7 +251,7 @@ add_library(rope SHARED
 set_target_properties(rope PROPERTIES PREFIX "lib")
 target_compile_definitions(rope PRIVATE ROPE_BUILDING_SHARED)
 target_link_libraries(rope
-    PRIVATE rope_client
+    PRIVATE rope_io
             rope_interpolate
             nlohmann_json::nlohmann_json
 )
@@ -282,14 +270,14 @@ add_executable(rope_exe
 )
 set_target_properties(rope_exe PROPERTIES OUTPUT_NAME rope)
 target_link_libraries(rope_exe
-    PRIVATE rope_client
-            rope_server
-            rope_io
+    PRIVATE rope_io
+            rope_interpolate
             CLI11::CLI11
             nlohmann_json::nlohmann_json
 )
 if(TARGET rope_forecast)
     target_link_libraries(rope_exe PRIVATE rope_forecast)
+    target_compile_definitions(rope_exe PRIVATE ROPE_HAS_FORECAST)
 endif()
 rope_set_runtime_rpath(rope_exe)
 # Search both the standard tarball layout (bin/ + ../lib/) and a flat layout
@@ -370,15 +358,15 @@ if(Torch_FOUND)
 endif()
 
 # Model artifacts
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data/models/tiegcm-lstm-v1")
-    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/models/tiegcm-lstm-v1/" DESTINATION data/models/tiegcm-lstm-v1)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data/models/tiegcm-aurora-v1")
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/models/tiegcm-aurora-v1/" DESTINATION data/models/tiegcm-aurora-v1)
 endif()
 
 # Optional override — point -DROPE_MODELS_DIR= at a different exported dir
 set(ROPE_MODELS_DIR "" CACHE PATH
-    "Directory of exported model artifacts to bundle in the package (overrides data/models/tiegcm-lstm-v1)")
+    "Directory of exported model artifacts to bundle in the package (overrides data/models/tiegcm-aurora-v1)")
 if(ROPE_MODELS_DIR AND EXISTS "${ROPE_MODELS_DIR}")
-    install(DIRECTORY "${ROPE_MODELS_DIR}/" DESTINATION data/models/tiegcm-lstm-v1)
+    install(DIRECTORY "${ROPE_MODELS_DIR}/" DESTINATION data/models/tiegcm-aurora-v1)
 endif()
 
 # Space-weather binary (bundled historical data; used as driver_path override

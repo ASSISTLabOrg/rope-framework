@@ -9,7 +9,7 @@ Reference for contributors and integrators working with the ROPE source code dir
 | [pipeline.md](pipeline.md) | The full inference pipeline step by step: driver loading, sequence building, base model rollout, meta fusion, Unscented Transform, latent decoding |
 | [driver-system.md](driver-system.md) | SpaceWeatherDB, DriverConfig, DriverCacheManager, binary formats, IC table, preprocessing script |
 | [interpolation.md](interpolation.md) | ForecastGrid structure, coordinate handling, trilinear spatial interpolation in log₁₀ space, temporal blending |
-| [server-protocol.md](server-protocol.md) | Server lifecycle, IPC wire format, all request types, spawn mechanism |
+| [forecast-cache-format.md](forecast-cache-format.md) | The on-disk forecast-grid cache file: layout, atomic writes, memory-mapped reads |
 | [model-artifacts.md](model-artifacts.md) | ONNX models, stats files, driver_config.json, ic_config.json, version compatibility |
 | [io.md](io.md) | CsvReader, ConfigReader, Stats/FeatureNormalizer, binary format details, adding new formats |
 | [adding-a-pipeline.md](adding-a-pipeline.md) | How to add a new pipeline kind: registry, manifest spec, checklist |
@@ -29,15 +29,13 @@ If you are new to the codebase, read in this order:
 
 ```
 src/
-  cli/           entry point, argument parsing, server lifecycle
-  client/        IPC socket transport
-  server/        long-lived server, request routing, ForecastGrid cache
+  cli/           entry point, argument parsing, forecast/get commands
   forecast/      inference pipeline (pipeline.cpp + internal headers)
-  interpolate/   GridInterpolator
-  io/            all file I/O
-  capi/          C shared-library wrapper
+  interpolate/   GridInterpolator<Grid>
+  io/            all file I/O, incl. the forecast-grid cache file
+  capi/          C shared-library wrapper (memory-maps the cache file)
   core/
-    platform/    OS-specific: sockets, spawn, exe_path, cache_dir
+    platform/    OS-specific: exe_path, cache_dir, memory-mapped files
 
 include/rope/    public headers mirroring src/ layout
 ```

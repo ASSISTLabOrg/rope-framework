@@ -39,7 +39,9 @@ Add a branch to the manifest loader that populates `my_new_kind` when `manifest.
 
 ### 4. `src/forecast/` — write the pipeline
 
-Create `my_new_kind_pipeline.h` and `my_new_kind_pipeline.cpp`. The class must:
+Create a new subdirectory `src/forecast/my_new_kind/` and put `my_new_kind_pipeline.h`/`.cpp` there, along with any helper classes private to this kind (rollout strategy, fuser, decoder, uncertainty propagation, etc. — whatever is analogous to `stacked_ensemble/`'s `ensemble_fuser.h`, `latent_decoder.h`, `unscented_transform.h`). Only `src/forecast/` itself holds kind-agnostic plumbing (`pipeline.cpp`, `pipeline_registry.*`, `config_builder.cpp`); `src/forecast/backends/` holds the ONNX/LibTorch `IModel` abstraction shared by any kind that runs neural-net inference — reuse it rather than duplicating a model-backend wrapper inside your new kind's subdirectory. A kind with no learned models at all (e.g. a closed-form matrix/ODE rollout) may not need `backends/` at all.
+
+The pipeline class must:
 - Inherit `Pipeline` from `include/rope/forecast/pipeline.h`
 - Implement `ForecastGrid run(const std::string& start_iso, int horizon) override`
 - Take `(const Config& cfg, const io::ModelManifest& manifest)` in its constructor
@@ -47,7 +49,7 @@ Create `my_new_kind_pipeline.h` and `my_new_kind_pipeline.cpp`. The class must:
 ### 5. `src/forecast/pipeline_registry.cpp` — register it
 
 ```cpp
-#include "my_new_kind_pipeline.h"
+#include "my_new_kind/my_new_kind_pipeline.h"
 
 // In create_pipeline_for_kind():
 if (manifest.kind == "my_new_kind")
@@ -58,7 +60,7 @@ if (manifest.kind == "my_new_kind")
 
 ```cpp
 inline std::vector<std::string> known_kinds() {
-    return {"ensemble_fusion_decoder", "my_new_kind"};
+    return {"stacked_ensemble", "my_new_kind"};
 }
 ```
 
@@ -67,7 +69,7 @@ inline std::vector<std::string> known_kinds() {
 ```cmake
 add_library(rope_forecast STATIC
     ...
-    src/forecast/my_new_kind_pipeline.cpp
+    src/forecast/my_new_kind/my_new_kind_pipeline.cpp
 )
 ```
 

@@ -1,5 +1,5 @@
 #pragma once
-#include "model_interface.h"
+#include "backends/model_interface.h"
 
 namespace rope::forecast {
 

@@ -13,7 +13,7 @@ std::unique_ptr<Pipeline> create_pipeline_for_kind(
 
 // Inline so Cat A tests can call it without linking rope_forecast.
 inline std::vector<std::string> known_kinds() {
-    return {"ensemble_fusion_decoder"};
+    return {"stacked_ensemble"};
 }
 
 } // namespace rope::forecast

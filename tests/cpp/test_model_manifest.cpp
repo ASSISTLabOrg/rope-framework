@@ -22,13 +22,16 @@ static fs::path write_manifest(const std::string& json_str, const char* dir_name
 // A minimal valid manifest with 3 base models and one decoder stage.
 static const char* VALID_3BM = R"({
   "schema_version": 1,
-  "kind": "ensemble_fusion_decoder",
+  "kind": "stacked_ensemble",
   "runtime_requirements": { "onnxruntime": "1.25" },
   "latent_dim": 10,
   "driver_columns": ["f10", "kp", "t1", "t2", "t3", "t4"],
   "driver_source": "celestrak_sw",
   "validated": false,
-  "ensemble_fusion_decoder": {
+  "grid": { "n_lst": 72, "n_lat": 36, "n_alt": 45,
+            "lat_min_deg": -87.5, "lat_max_deg": 87.5,
+            "alt_min_km": 100.0, "alt_max_km": 980.0 },
+  "stacked_ensemble": {
     "seq_len": 3,
     "decode_batch_size": 120,
     "base_models": [
@@ -71,11 +74,12 @@ TEST_CASE("ModelManifest: malformed JSON throws") {
 // -------------------------------------------------------------------
 TEST_CASE("ModelManifest: missing schema_version throws") {
     write_manifest(R"({
-      "kind": "ensemble_fusion_decoder",
+      "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}],
@@ -89,10 +93,10 @@ TEST_CASE("ModelManifest: missing schema_version throws") {
 
 TEST_CASE("ModelManifest: missing latent_dim throws") {
     write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "driver_columns": ["f10"], "driver_source": "s", "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}],
@@ -106,10 +110,10 @@ TEST_CASE("ModelManifest: missing latent_dim throws") {
 
 TEST_CASE("ModelManifest: missing driver_columns throws") {
     write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "driver_source": "s", "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}],
@@ -143,7 +147,7 @@ TEST_CASE("ModelManifest: unsupported kind throws") {
 // -------------------------------------------------------------------
 TEST_CASE("ModelManifest: unsupported schema_version throws") {
     write_manifest(R"({
-      "schema_version": 99, "kind": "ensemble_fusion_decoder",
+      "schema_version": 99, "kind": "stacked_ensemble",
       "runtime_requirements": {}, "latent_dim": 10,
       "driver_columns": ["f10"], "driver_source": "s", "validated": false
     })", "rope_mtest_badver");
@@ -156,13 +160,14 @@ TEST_CASE("ModelManifest: unsupported schema_version throws") {
 // -------------------------------------------------------------------
 // Nested ic block (rope-registry shape)
 // -------------------------------------------------------------------
-TEST_CASE("ModelManifest: missing ensemble_fusion_decoder.ic throws") {
+TEST_CASE("ModelManifest: missing stacked_ensemble.ic throws") {
     write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
@@ -175,11 +180,12 @@ TEST_CASE("ModelManifest: missing ensemble_fusion_decoder.ic throws") {
 
 TEST_CASE("ModelManifest: ic.params missing grid_axes throws") {
     write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}],
@@ -193,11 +199,12 @@ TEST_CASE("ModelManifest: ic.params missing grid_axes throws") {
 
 TEST_CASE("ModelManifest: valid nested ic block parses") {
     auto dir = write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "driver_columns": ["f10","kp"], "driver_source": "s",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}],
@@ -214,11 +221,12 @@ TEST_CASE("ModelManifest: valid nested ic block parses") {
 // -------------------------------------------------------------------
 TEST_CASE("ModelManifest: onnx backend without onnxruntime version throws") {
     write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {},
       "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}],
@@ -232,11 +240,12 @@ TEST_CASE("ModelManifest: onnx backend without onnxruntime version throws") {
 
 TEST_CASE("ModelManifest: libtorch backend without libtorch version throws") {
     write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[{"backends":{"onnx":"d.onnx","libtorch":"d.pt"},"stats":"s.bin","alt_start":0,"alt_end":45}],
@@ -254,14 +263,75 @@ TEST_CASE("ModelManifest: libtorch backend without libtorch version throws") {
 TEST_CASE("ModelManifest: 3 base models parse with correct count") {
     auto dir = write_manifest(VALID_3BM, "rope_mtest_3bm");
     auto m = ModelManifest::load(dir);
-    REQUIRE(m.kind == "ensemble_fusion_decoder");
+    REQUIRE(m.kind == "stacked_ensemble");
     REQUIRE(m.latent_dim == 10);
     REQUIRE(m.driver_columns.size() == 6);
-    REQUIRE(m.ensemble_fusion_decoder.has_value());
-    CHECK(m.ensemble_fusion_decoder->base_models.size() == 3);
-    CHECK(m.ensemble_fusion_decoder->base_models[2].inter_op_threads == 2);
-    CHECK(m.ensemble_fusion_decoder->base_models[2].architecture == "transformer");
-    CHECK(m.ensemble_fusion_decoder->decoders.size() == 1);
+    REQUIRE(m.stacked_ensemble.has_value());
+    CHECK(m.stacked_ensemble->base_models.size() == 3);
+    CHECK(m.stacked_ensemble->base_models[2].inter_op_threads == 2);
+    CHECK(m.stacked_ensemble->base_models[2].architecture == "transformer");
+    CHECK(m.stacked_ensemble->decoders.size() == 1);
+}
+
+// -------------------------------------------------------------------
+// grid — per-model physical shape
+// -------------------------------------------------------------------
+TEST_CASE("ModelManifest: missing grid throws") {
+    write_manifest(R"({
+      "schema_version": 1, "kind": "stacked_ensemble",
+      "runtime_requirements": {"onnxruntime":"1.25"},
+      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "validated": false,
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
+        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"},
+        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}],
+        "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}}}
+    })", "rope_mtest_nogrid");
+    REQUIRE_THROWS_AS(
+        ModelManifest::load(fs::temp_directory_path() / "rope_mtest_nogrid"),
+        std::runtime_error
+    );
+}
+
+TEST_CASE("ModelManifest: grid.lat_min_deg >= lat_max_deg throws") {
+    write_manifest(R"({
+      "schema_version": 1, "kind": "stacked_ensemble",
+      "runtime_requirements": {"onnxruntime":"1.25"},
+      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "validated": false,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":87.5,"lat_max_deg":-87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
+        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"},
+        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}],
+        "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}}}
+    })", "rope_mtest_badlat");
+    REQUIRE_THROWS_AS(
+        ModelManifest::load(fs::temp_directory_path() / "rope_mtest_badlat"),
+        std::runtime_error
+    );
+}
+
+TEST_CASE("ModelManifest: grid with a different physical shape parses") {
+    // A model trained on a coarser, shorter-range grid than the 72x36x45 default.
+    auto dir = write_manifest(R"({
+      "schema_version": 1, "kind": "stacked_ensemble",
+      "runtime_requirements": {"onnxruntime":"1.25"},
+      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "validated": false,
+      "grid": {"n_lst":36,"n_lat":18,"n_alt":20,"lat_min_deg":-60.0,"lat_max_deg":60.0,"alt_min_km":150.0,"alt_max_km":500.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
+        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"},
+        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":20}],
+        "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}}}
+    })", "rope_mtest_altgrid");
+    auto m = ModelManifest::load(dir);
+    CHECK(m.grid.n_lst == 36);
+    CHECK(m.grid.n_lat == 18);
+    CHECK(m.grid.n_alt == 20);
+    CHECK(m.grid.voxels() == 36 * 18 * 20);
 }
 
 // -------------------------------------------------------------------
@@ -270,11 +340,12 @@ TEST_CASE("ModelManifest: 3 base models parse with correct count") {
 TEST_CASE("ModelManifest: altitude gap throws") {
     // [0,20) then [22,45) — gap between 20 and 22
     write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[
@@ -292,11 +363,12 @@ TEST_CASE("ModelManifest: altitude gap throws") {
 TEST_CASE("ModelManifest: altitude overlap throws") {
     // [0,25) then [20,45) — overlap between 20 and 25
     write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[
@@ -313,11 +385,12 @@ TEST_CASE("ModelManifest: altitude overlap throws") {
 
 TEST_CASE("ModelManifest: first alt_start != 0 throws") {
     write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[
@@ -331,13 +404,14 @@ TEST_CASE("ModelManifest: first alt_start != 0 throws") {
     );
 }
 
-TEST_CASE("ModelManifest: last alt_end != GRID_ALT throws") {
+TEST_CASE("ModelManifest: last alt_end != grid.n_alt throws") {
     write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[
@@ -354,11 +428,12 @@ TEST_CASE("ModelManifest: last alt_end != GRID_ALT throws") {
 TEST_CASE("ModelManifest: valid two-stage altitude split parses") {
     // [0,22) + [22,45) — exact tiling with libtorch declared
     auto dir = write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25","libtorch":"2.7"},
       "latent_dim": 10, "driver_columns": ["f10","kp"], "driver_source": "celestrak_sw",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[
@@ -370,13 +445,13 @@ TEST_CASE("ModelManifest: valid two-stage altitude split parses") {
         "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}}}
     })", "rope_mtest_2stage");
     auto m = ModelManifest::load(dir);
-    REQUIRE(m.ensemble_fusion_decoder.has_value());
-    const auto& stages = m.ensemble_fusion_decoder->decoders;
+    REQUIRE(m.stacked_ensemble.has_value());
+    const auto& stages = m.stacked_ensemble->decoders;
     REQUIRE(stages.size() == 2);
     CHECK(stages[0].alt_start == 0);
     CHECK(stages[0].alt_end   == 22);
     CHECK(stages[1].alt_start == 22);
-    CHECK(stages[1].alt_end   == rope::GRID_ALT);
+    CHECK(stages[1].alt_end   == m.grid.n_alt);
     CHECK(stages[0].stats == "stats_lo.bin");
     CHECK(stages[1].stats == "stats_hi.bin");
 }
@@ -386,11 +461,12 @@ TEST_CASE("ModelManifest: valid two-stage altitude split parses") {
 // -------------------------------------------------------------------
 TEST_CASE("ModelManifest: out-of-order decoder stages are sorted on load") {
     auto dir = write_manifest(R"({
-      "schema_version": 1, "kind": "ensemble_fusion_decoder",
+      "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
       "validated": false,
-      "ensemble_fusion_decoder": {"seq_len":3,"decode_batch_size":120,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
         "decoders":[
@@ -400,7 +476,7 @@ TEST_CASE("ModelManifest: out-of-order decoder stages are sorted on load") {
         "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}}}
     })", "rope_mtest_order");
     auto m = ModelManifest::load(dir);
-    const auto& stages = m.ensemble_fusion_decoder->decoders;
+    const auto& stages = m.stacked_ensemble->decoders;
     REQUIRE(stages.size() == 2);
     CHECK(stages[0].alt_start == 0);
     CHECK(stages[1].alt_start == 22);

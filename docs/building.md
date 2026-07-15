@@ -106,7 +106,7 @@ ctest --test-dir build -R rope_cli --output-on-failure
 # or run directly:
 ROPE_EXE=build/rope ROPE_FIXTURE_DIR=tests/fixtures pytest tests/python/ -v
 ```
-Exercises the full CLI round-trip: server spawn, forecast, single-point query, batch query, idle timeout.
+Exercises the full CLI round-trip: forecast (writes the cache file), single-point query, batch query, the discard-on-reforecast invariant, and error paths.
 
 ---
 
@@ -134,11 +134,9 @@ The targets defined in `CMakeLists.txt`:
 
 | Target | Type | Purpose |
 |--------|------|---------|
-| `rope_core` | static lib | Platform layer, datetime, types |
-| `rope_io` | static lib | CSV/binary I/O, config, stats, driver DB, IC table, cache manager |
-| `rope_interpolate` | static lib | Grid interpolator |
-| `rope_client` | static lib | IPC client (used by CLI and C API) |
+| `rope_core` | static lib | Platform layer (paths, memory-mapped files), datetime, types |
+| `rope_io` | static lib | CSV/binary I/O, config, stats, driver DB, IC table, cache manager, forecast-grid cache file |
+| `rope_interpolate` | static lib | Grid interpolator (`GridInterpolator<Grid>`, templated) |
 | `rope_forecast` | static lib | Full inference pipeline (requires ORT) |
-| `rope_server` | static lib | Server request router and cache |
 | `rope` | shared lib | C API (`librope.so` / `.dylib` / `.dll`) |
 | `rope_exe` | executable | CLI binary (`rope`) |

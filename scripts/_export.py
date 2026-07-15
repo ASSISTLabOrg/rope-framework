@@ -6,8 +6,8 @@ Converts all neural-network weights and normalization statistics to formats
 readable by the C++ implementation:
   - Keras base models (15x) and meta model → ONNX
   - PyTorch COAE decoder → ONNX + TorchScript (.pt)
-  - stats_ts.pt  → data/models/tiegcm-lstm-v1/stats_ts.bin   (1-D z-score stats)
-  - stats_cae.pt → data/models/tiegcm-lstm-v1/stats_cae.bin  (spatial z-score stats for density)
+  - stats_ts.pt  → data/models/tiegcm-aurora-v1/stats_ts.bin   (1-D z-score stats)
+  - stats_cae.pt → data/models/tiegcm-aurora-v1/stats_cae.bin  (spatial z-score stats for density)
 
 Binary stats format:
   uint32  ndim
@@ -31,7 +31,7 @@ import tensorflow as tf
 from pathlib import Path
 
 ROOT       = Path(__file__).parent.parent
-EXPORT_DIR = ROOT / "data" / "models" / "tiegcm-lstm-v1"
+EXPORT_DIR = ROOT / "data" / "models" / "tiegcm-aurora-v1"
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 SEQ_LEN    = 3

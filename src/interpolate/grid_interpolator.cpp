@@ -1,4 +1,5 @@
 #include "rope/interpolate/grid_interpolator.h"
+#include "rope/io/mapped_forecast_grid.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,42 +11,49 @@ namespace rope::interpolate {
 // Construction
 // ---------------------------------------------------------------------------
 
-static std::vector<double> make_lst_axis() {
-    std::vector<double> v(GRID_LST);
-    for (int i = 0; i < GRID_LST; ++i)
-        v[i] = i * (24.0 / GRID_LST);
+static std::vector<double> make_lst_axis(const GridSpec& shape) {
+    std::vector<double> v(shape.n_lst);
+    for (int i = 0; i < shape.n_lst; ++i)
+        v[i] = i * (24.0 / shape.n_lst);
     return v;
 }
-static std::vector<double> make_lat_axis() {
-    std::vector<double> v(GRID_LAT);
-    for (int i = 0; i < GRID_LAT; ++i)
-        v[i] = -87.5 + i * (175.0 / (GRID_LAT - 1));
+static std::vector<double> make_lat_axis(const GridSpec& shape) {
+    std::vector<double> v(shape.n_lat);
+    const double span = shape.lat_max_deg - shape.lat_min_deg;
+    for (int i = 0; i < shape.n_lat; ++i)
+        v[i] = shape.lat_min_deg + i * (span / (shape.n_lat - 1));
     return v;
 }
-static std::vector<double> make_alt_axis() {
-    std::vector<double> v(GRID_ALT);
-    for (int i = 0; i < GRID_ALT; ++i)
-        v[i] = 100.0 + i * (880.0 / (GRID_ALT - 1));
+static std::vector<double> make_alt_axis(const GridSpec& shape) {
+    std::vector<double> v(shape.n_alt);
+    const double span = shape.alt_max_km - shape.alt_min_km;
+    for (int i = 0; i < shape.n_alt; ++i)
+        v[i] = shape.alt_min_km + i * (span / (shape.n_alt - 1));
     return v;
 }
 
-GridInterpolator::GridInterpolator(const ForecastGrid& grid)
+template <class Grid>
+GridInterpolator<Grid>::GridInterpolator(const Grid& grid)
     : grid_(grid)
     , times_(grid.times)
     , H_(grid.H)
-    , lst_ax_(make_lst_axis())
-    , lat_ax_(make_lat_axis())
-    , alt_ax_(make_alt_axis())
+    , lst_ax_(make_lst_axis(grid.shape))
+    , lat_ax_(make_lat_axis(grid.shape))
+    , alt_ax_(make_alt_axis(grid.shape))
+    , lst_step_(24.0 / grid.shape.n_lst)
+    , lat_step_((grid.shape.lat_max_deg - grid.shape.lat_min_deg) / (grid.shape.n_lat - 1))
+    , alt_step_((grid.shape.alt_max_km  - grid.shape.alt_min_km)  / (grid.shape.n_alt - 1))
 {
     if (H_ == 0)
-        throw std::runtime_error("GridInterpolator: empty ForecastGrid");
+        throw std::runtime_error("GridInterpolator: empty grid");
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-void GridInterpolator::check_spatial(double lst, double lat, double alt_km) const {
+template <class Grid>
+void GridInterpolator<Grid>::check_spatial(double lst, double lat, double alt_km) const {
     (void)lst;  // LST is periodic — any value is valid
     if (lat < lat_ax_.front() || lat > lat_ax_.back()) {
         std::ostringstream oss;
@@ -63,7 +71,8 @@ void GridInterpolator::check_spatial(double lst, double lat, double alt_km) cons
     }
 }
 
-void GridInterpolator::check_time(TimePoint tp) const {
+template <class Grid>
+void GridInterpolator<Grid>::check_time(TimePoint tp) const {
     if (tp < times_.front() || tp > times_.back()) {
         std::ostringstream oss;
         oss << "Requested time " << format_iso(tp)
@@ -74,14 +83,16 @@ void GridInterpolator::check_time(TimePoint tp) const {
     }
 }
 
-std::pair<int, int> GridInterpolator::bracket(TimePoint tp) const {
+template <class Grid>
+std::pair<int, int> GridInterpolator<Grid>::bracket(TimePoint tp) const {
     auto it = std::lower_bound(times_.begin(), times_.end(), tp);
     int i1 = static_cast<int>(it - times_.begin());
     if (it != times_.end() && *it == tp) return {i1, i1};
     return {i1 - 1, i1};
 }
 
-int GridInterpolator::lower_idx(const std::vector<double>& ax, double v) noexcept {
+template <class Grid>
+int GridInterpolator<Grid>::lower_idx(const std::vector<double>& ax, double v) noexcept {
     auto it = std::lower_bound(ax.begin(), ax.end(), v);
     int i   = static_cast<int>(it - ax.begin());
     return std::max(0, std::min(i - 1, static_cast<int>(ax.size()) - 2));
@@ -91,34 +102,36 @@ int GridInterpolator::lower_idx(const std::vector<double>& ax, double v) noexcep
 // Trilinear interpolation in log10 space
 // ---------------------------------------------------------------------------
 
-double GridInterpolator::spatial_interp(const float* base,
-                                         double lst, double lat, double alt_km) const {
+template <class Grid>
+double GridInterpolator<Grid>::spatial_interp(const float* base,
+                                               double lst, double lat, double alt_km) const {
+    const int n_lst = grid_.shape.n_lst;
+    const int n_lat = grid_.shape.n_lat;
+    const int n_alt = grid_.shape.n_alt;
+
     // --- LST: uniform step, periodic ---
-    constexpr double LST_STEP = 24.0 / GRID_LST;
     lst = lst - std::floor(lst / 24.0) * 24.0;  // normalize to [0, 24)
-    int li0 = static_cast<int>(lst / LST_STEP);
-    if (li0 >= GRID_LST) li0 = GRID_LST - 1;
-    int    li1  = (li0 + 1) % GRID_LST;          // wraps 71 → 0
+    int li0 = static_cast<int>(lst / lst_step_);
+    if (li0 >= n_lst) li0 = n_lst - 1;
+    int    li1  = (li0 + 1) % n_lst;             // wraps n_lst-1 → 0
     double lst1 = (li1 == 0) ? 24.0 : lst_ax_[li1];
     double wl   = (lst - lst_ax_[li0]) / (lst1 - lst_ax_[li0]);
 
     // --- Latitude: uniform ---
-    constexpr double LAT_STEP = 175.0 / (GRID_LAT - 1);
-    int ai0 = static_cast<int>((lat - lat_ax_.front()) / LAT_STEP);
-    ai0 = std::max(0, std::min(ai0, GRID_LAT - 2));
+    int ai0 = static_cast<int>((lat - lat_ax_.front()) / lat_step_);
+    ai0 = std::max(0, std::min(ai0, n_lat - 2));
     int    ai1 = ai0 + 1;
     double wa  = (lat - lat_ax_[ai0]) / (lat_ax_[ai1] - lat_ax_[ai0]);
 
     // --- Altitude: uniform ---
-    constexpr double ALT_STEP = 880.0 / (GRID_ALT - 1);
-    int zi0 = static_cast<int>((alt_km - alt_ax_.front()) / ALT_STEP);
-    zi0 = std::max(0, std::min(zi0, GRID_ALT - 2));
+    int zi0 = static_cast<int>((alt_km - alt_ax_.front()) / alt_step_);
+    zi0 = std::max(0, std::min(zi0, n_alt - 2));
     int    zi1 = zi0 + 1;
     double wz  = (alt_km - alt_ax_[zi0]) / (alt_ax_[zi1] - alt_ax_[zi0]);
 
-    auto idx = [](int l, int a, int z) -> std::size_t {
-        return static_cast<std::size_t>(l) * (GRID_LAT * GRID_ALT)
-             + static_cast<std::size_t>(a) * GRID_ALT
+    auto idx = [n_lat, n_alt](int l, int a, int z) -> std::size_t {
+        return static_cast<std::size_t>(l) * (n_lat * n_alt)
+             + static_cast<std::size_t>(a) * n_alt
              + z;
     };
 
@@ -137,7 +150,8 @@ double GridInterpolator::spatial_interp(const float* base,
     return std::pow(10.0, lerp(c0, c1, wz));
 }
 
-InterpolationResult GridInterpolator::spatial_both(
+template <class Grid>
+InterpolationResult GridInterpolator<Grid>::spatial_both(
     int t, double lst, double lat, double alt_km) const
 {
     const float* d = grid_.density_at(t);
@@ -152,7 +166,8 @@ InterpolationResult GridInterpolator::spatial_both(
 // Public query methods
 // ---------------------------------------------------------------------------
 
-InterpolationResult GridInterpolator::query_hold(
+template <class Grid>
+InterpolationResult GridInterpolator<Grid>::query_hold(
     TimePoint time_unix, double lst, double lat, double alt_km) const
 {
     check_time(time_unix);
@@ -163,7 +178,8 @@ InterpolationResult GridInterpolator::query_hold(
     return spatial_both(use_i, lst, lat, alt_km);
 }
 
-InterpolationResult GridInterpolator::query_interp(
+template <class Grid>
+InterpolationResult GridInterpolator<Grid>::query_interp(
     TimePoint time_unix, double lst, double lat, double alt_km) const
 {
     check_time(time_unix);
@@ -185,5 +201,11 @@ InterpolationResult GridInterpolator::query_interp(
         lerp(r0.uncertainty, r1.uncertainty, w),
     };
 }
+
+// ---------------------------------------------------------------------------
+// Explicit instantiation — the only two grid backings that exist.
+// ---------------------------------------------------------------------------
+template class GridInterpolator<ForecastGrid>;
+template class GridInterpolator<io::MappedForecastGrid>;
 
 } // namespace rope::interpolate

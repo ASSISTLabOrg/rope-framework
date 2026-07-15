@@ -8,10 +8,20 @@
 
 using namespace Catch::Matchers;
 using rope::ForecastGrid;
-using rope::GRID_VOXELS;
+using rope::GridSpec;
 using rope::interpolate::GridInterpolator;
 using rope::interpolate::SpatialOutOfRangeError;
 using rope::interpolate::TimeOutOfRangeError;
+
+// Matches the shape used throughout these tests: 72 LST x 36 lat x 45 alt,
+// covering the same physical range the hardcoded constants used to assume.
+static GridSpec test_shape() {
+    GridSpec s;
+    s.n_lst = 72; s.n_lat = 36; s.n_alt = 45;
+    s.lat_min_deg = -87.5; s.lat_max_deg = 87.5;
+    s.alt_min_km  = 100.0; s.alt_max_km  = 980.0;
+    return s;
+}
 
 // Epoch-hour helper
 static rope::TimePoint epoch_h(int h) {
@@ -22,9 +32,10 @@ static rope::TimePoint epoch_h(int h) {
 // log10(1.0)=0 → interpolation returns 10^0=1.0 everywhere.
 static ForecastGrid make_uniform_grid(float den = 1.0f, float unc = 0.5f) {
     ForecastGrid g;
+    g.shape = test_shape();
     g.H = 2;
-    g.density.assign(static_cast<std::size_t>(2) * GRID_VOXELS, den);
-    g.uncertainty.assign(static_cast<std::size_t>(2) * GRID_VOXELS, unc);
+    g.density.assign(static_cast<std::size_t>(2) * g.shape.voxels(), den);
+    g.uncertainty.assign(static_cast<std::size_t>(2) * g.shape.voxels(), unc);
     g.times = {epoch_h(0), epoch_h(1)};
     return g;
 }
@@ -73,10 +84,11 @@ TEST_CASE("GridInterpolator: time interpolation between two steps") {
     // Spatial interpolation is in log10 space → r0.density=1.0, r1.density=100.0.
     // Temporal interpolation is LINEAR: lerp(1.0, 100.0, 0.5) = 50.5.
     ForecastGrid g;
+    g.shape = test_shape();
     g.H = 2;
-    g.density.assign(static_cast<std::size_t>(2) * GRID_VOXELS, 1.0f);
-    g.uncertainty.assign(static_cast<std::size_t>(2) * GRID_VOXELS, 1.0f);
-    std::fill(g.density.begin() + GRID_VOXELS, g.density.end(), 100.0f);
+    g.density.assign(static_cast<std::size_t>(2) * g.shape.voxels(), 1.0f);
+    g.uncertainty.assign(static_cast<std::size_t>(2) * g.shape.voxels(), 1.0f);
+    std::fill(g.density.begin() + g.shape.voxels(), g.density.end(), 100.0f);
     g.times = {epoch_h(0), epoch_h(2)};  // 2-hour span
 
     GridInterpolator gi(g);

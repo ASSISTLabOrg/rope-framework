@@ -1,6 +1,6 @@
 # Model Artifacts
 
-All runtime artifacts live in a single flat directory (`exported_dir`, configured via `paths.exported_dir` in `rope.conf`). They are produced by an external training pipeline and loaded at server startup. This service never modifies them.
+All runtime artifacts live in a single flat directory (`exported_dir`, configured via `paths.exported_dir` in `rope.conf`). They are produced by an external training pipeline and loaded when `rope forecast` runs. This service never modifies them.
 
 ---
 
@@ -65,7 +65,7 @@ Two output shapes are supported, auto-detected from `meta_model_out_shape.bin` a
 Decodes latent vectors to physical density grids.
 
 **Input:** `(batch, K=10)` — latent vectors already denormalized to physical space
-**Output:** `(batch, 1, 72, 36, 45)` — log₁₀-normalized density
+**Output:** `(batch, 1, n_lst, n_lat, n_alt)` — log₁₀-normalized density, where `n_lst`/`n_lat`/`n_alt` are this model's `grid` shape declared in `model_manifest.json` (72×36×45 for the reference model below, but per-model in general)
 
 **Denormalization:**
 ```
@@ -106,8 +106,8 @@ The shape of `stats_ts.bin` implicitly determines `D`, which determines `driver_
 Z-score statistics for the decoder output.
 
 **Shape variants:**
-- `(1,)` — single scalar mean/sigma applied uniformly to all 116,640 voxels
-- `(1, 72, 36, 45)` — per-voxel statistics (spatially varying normalization)
+- `(1,)` — single scalar mean/sigma applied uniformly to all voxels
+- `(1, n_lst, n_lat, n_alt)` — per-voxel statistics (spatially varying normalization), matching this model's `grid` shape
 
 The shape is read at load time and the correct denormalization logic is selected automatically.
 
