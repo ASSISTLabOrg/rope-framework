@@ -3,6 +3,7 @@ data/
 __pycache__
 *.pkl
 *.csv
+!tests/fixtures/**/*.csv
 .artifacts/
 .pytest_cache
 _CPack_Packages/

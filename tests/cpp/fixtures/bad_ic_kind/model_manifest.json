@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "stacked_ensemble",
   "runtime_requirements": {
-    "onnxruntime": "0.0"
+    "onnxruntime": "1.25"
   },
   "latent_dim": 10,
   "driver_columns": [
@@ -25,12 +25,9 @@
     "alt_max_km": 980.0
   },
   "ic": {
-    "kind": "ic_lookup_table",
+    "kind": "nonexistent_ic_kind",
     "params": {
-      "grid_axes": [
-        "f10",
-        "kp"
-      ],
+      "grid_axes": ["f10", "kp"],
       "file": "ic_table.icbin"
     }
   },

@@ -3,9 +3,9 @@
 #include "rope/forecast/pipeline.h"
 #include "rope/io/model_manifest.h"
 #include "rope/io/driver_db.h"
-#include "rope/io/ic_table.h"
 #include "rope/io/stats.h"
 
+#include "backends/ic_source.h"
 #include "backends/model_interface.h"
 #include "ensemble_fuser.h"
 #include "latent_decoder.h"
@@ -41,7 +41,7 @@ private:
 
     // --- Data sources ---
     std::unique_ptr<io::SpaceWeatherDB>    sw_db_;
-    std::unique_ptr<io::ICTable>           ic_table_;
+    std::unique_ptr<IICSource>             ic_source_;
     std::unique_ptr<io::FeatureNormalizer> ts_norm_;
 
     // --- Models ---
@@ -59,7 +59,8 @@ private:
     std::unique_ptr<IRolloutStrategy>      rollout_;
 
     // --- Constructor helpers ---
-    void load_ic_table(const std::filesystem::path& dir);
+    void load_ic_source(const io::ModelManifest& manifest,
+                         const std::filesystem::path& dir);
     void load_sw_db(const Config& cfg);
     void load_base_models(const Config& cfg, const io::ModelManifest& manifest,
                            const std::filesystem::path& dir);

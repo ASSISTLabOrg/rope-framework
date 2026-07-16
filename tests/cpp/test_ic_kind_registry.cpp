@@ -5,11 +5,11 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
-#include "../../src/forecast/pipeline_registry.h"
+#include "../../src/forecast/backends/ic_source_factory.h"
 
-TEST_CASE("known_kinds() exactly matches stable entries in rope-registry/pipeline_kinds.json") {
-    std::string kinds_path = std::string(ROPE_REGISTRY_DIR) + "/pipeline_kinds.json";
-    std::ifstream f(kinds_path);
+TEST_CASE("known_ic_kinds() exactly matches stable entries in rope-registry/ic_kinds.json") {
+    std::string ic_kinds_path = std::string(ROPE_REGISTRY_DIR) + "/ic_kinds.json";
+    std::ifstream f(ic_kinds_path);
     REQUIRE(f.is_open());
 
     auto j = nlohmann::json::parse(f);
@@ -21,7 +21,7 @@ TEST_CASE("known_kinds() exactly matches stable entries in rope-registry/pipelin
     }
     std::sort(stable.begin(), stable.end());
 
-    auto known = rope::forecast::known_kinds();
+    auto known = rope::forecast::known_ic_kinds();
     std::sort(known.begin(), known.end());
 
     CHECK(known == stable);

@@ -1,5 +1,6 @@
 #include "stacked_ensemble_pipeline.h"
 
+#include "backends/ic_source_factory.h"
 #include "backends/runtime_compat.h"
 #include "grid_stitch.h"
 #include "sliding_window_rollout.h"
@@ -90,7 +91,7 @@ StackedEnsemblePipeline::StackedEnsemblePipeline(
             " driver_columns but stats_ts.bin expects driver_dim=" +
             std::to_string(dd));
 
-    load_ic_table(dir);
+    load_ic_source(manifest, dir);
     load_sw_db(cfg);
     load_base_models(cfg, manifest, dir);
     load_meta_model(cfg, manifest, dir, D);
@@ -108,14 +109,16 @@ StackedEnsemblePipeline::StackedEnsemblePipeline(
 // Constructor helpers
 // ---------------------------------------------------------------------------
 
-void StackedEnsemblePipeline::load_ic_table(const fs::path& dir) {
-    log_("Loading IC table\xe2\x80\xa6");
-    ic_table_ = std::make_unique<io::ICTable>(io::ICTable::load_from_dir(dir));
-    if (ic_table_->latent_dim() != K_)
+void StackedEnsemblePipeline::load_ic_source(
+    const io::ModelManifest& manifest, const fs::path& dir)
+{
+    log_("Loading IC source\xe2\x80\xa6");
+    ic_source_ = make_ic_source(dir, manifest.ic_kind);
+    if (ic_source_->latent_dim() != K_)
         throw std::runtime_error(
             "StackedEnsemblePipeline: manifest latent_dim=" +
-            std::to_string(K_) + " does not match IC table K=" +
-            std::to_string(ic_table_->latent_dim()));
+            std::to_string(K_) + " does not match IC source latent_dim=" +
+            std::to_string(ic_source_->latent_dim()));
 }
 
 void StackedEnsemblePipeline::load_sw_db(const Config& cfg) {
@@ -242,7 +245,7 @@ std::vector<float> StackedEnsemblePipeline::build_X_init_norm(
         const io::DriverRow& row  = hist_rows[s];
         float*               dest = X.data() + s * D;
 
-        std::vector<float> coeffs = ic_table_->get_latent_coeffs(row.f10, row.kp);
+        std::vector<float> coeffs = ic_source_->get_latent_coeffs(row.f10, row.kp);
         for (int k = 0; k < K; ++k)
             dest[k] = coeffs[k];
 

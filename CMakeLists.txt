@@ -211,6 +211,7 @@ if(ORT_INC AND ORT_LIB)
         src/forecast/config_builder.cpp
         src/forecast/backends/runtime_compat.cpp
         src/forecast/backends/model_factory.cpp
+        src/forecast/backends/ic_source_factory.cpp
         src/forecast/stacked_ensemble/stacked_ensemble_pipeline.cpp
         src/forecast/stacked_ensemble/unscented_transform.cpp
     )

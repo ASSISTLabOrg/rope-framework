@@ -4,7 +4,7 @@
 
 `forecast::load(cfg)` reads `model_manifest.json` from `exported_dir`, checks `manifest.kind`, and dispatches to the matching constructor via `create_pipeline_for_kind()` in `src/forecast/pipeline_registry.cpp`. There is no plugin system — it is a plain string switch. Adding a new kind requires a code change in this file.
 
-`known_kinds()` in `pipeline_registry.h` is tested against the `stable` entries in `rope-registry/kinds.json` (Category A test `test_kind_registry.cpp`). Both must be updated in sync.
+`known_kinds()` in `pipeline_registry.h` is tested against the `stable` entries in `rope-registry/pipeline_kinds.json` (Category A test `test_kind_registry.cpp`). Both must be updated in sync.
 
 ---
 
@@ -12,7 +12,7 @@
 
 ### 1. `rope-registry` — add the kind
 
-Add an entry to `kinds.json`:
+Add an entry to `pipeline_kinds.json`:
 ```json
 { "kind": "my_new_kind", "schema": "schemas/kinds/my_new_kind.schema.json", "status": "stable" }
 ```
@@ -39,7 +39,7 @@ Add a branch to the manifest loader that populates `my_new_kind` when `manifest.
 
 ### 4. `src/forecast/` — write the pipeline
 
-Create a new subdirectory `src/forecast/my_new_kind/` and put `my_new_kind_pipeline.h`/`.cpp` there, along with any helper classes private to this kind (rollout strategy, fuser, decoder, uncertainty propagation, etc. — whatever is analogous to `stacked_ensemble/`'s `ensemble_fuser.h`, `latent_decoder.h`, `unscented_transform.h`). Only `src/forecast/` itself holds kind-agnostic plumbing (`pipeline.cpp`, `pipeline_registry.*`, `config_builder.cpp`); `src/forecast/backends/` holds the ONNX/LibTorch `IModel` abstraction shared by any kind that runs neural-net inference — reuse it rather than duplicating a model-backend wrapper inside your new kind's subdirectory. A kind with no learned models at all (e.g. a closed-form matrix/ODE rollout) may not need `backends/` at all.
+Create a new subdirectory `src/forecast/my_new_kind/` and put `my_new_kind_pipeline.h`/`.cpp` there, along with any helper classes private to this kind (rollout strategy, fuser, decoder, uncertainty propagation, etc. — whatever is analogous to `stacked_ensemble/`'s `ensemble_fuser.h`, `latent_decoder.h`, `unscented_transform.h`). Only `src/forecast/` itself holds kind-agnostic plumbing (`pipeline.cpp`, `pipeline_registry.*`, `config_builder.cpp`); `src/forecast/backends/` holds cross-kind, pluggable implementation-selection abstractions — the ONNX/LibTorch `IModel` abstraction shared by any kind that runs neural-net inference, and `IICSource` (IC-kind dispatch via `make_ic_source()`, `ic_source_factory.h`) — reuse these rather than duplicating a model-backend or IC-loading wrapper inside your new kind's subdirectory. A kind with no learned models at all (e.g. a closed-form matrix/ODE rollout) may not need the `IModel` half of `backends/` at all, but will still likely need `IICSource` if it seeds a latent state the same way.
 
 The pipeline class must:
 - Inherit `Pipeline` from `include/rope/forecast/pipeline.h`

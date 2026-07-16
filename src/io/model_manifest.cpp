@@ -125,29 +125,35 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
                 "ModelManifest::load: 'grid.alt_min_km' must be < 'grid.alt_max_km' in " + ps);
     }
 
+    // ic — top-level, kind-agnostic (rope-registry shape: manifest.ic =
+    // {kind, params: {grid_axes, file}}). No fallback/default: missing
+    // either sub-field is a hard failure.
+    if (!j.contains("ic") || !j["ic"].is_object())
+        throw std::runtime_error(missing_field("ic", ps));
+    const auto& jic = j["ic"];
+
+    if (!jic.contains("kind") || !jic["kind"].is_string())
+        throw std::runtime_error(missing_field("ic.kind", ps));
+    m.ic_kind = jic["kind"].get<std::string>();
+    if (m.ic_kind.empty())
+        throw std::runtime_error("ModelManifest::load: 'ic.kind' must not be empty in " + ps);
+
+    if (!jic.contains("params") || !jic["params"].is_object())
+        throw std::runtime_error(missing_field("ic.params", ps));
+    const auto& jic_params = jic["params"];
+    if (!jic_params.contains("grid_axes") || !jic_params["grid_axes"].is_array())
+        throw std::runtime_error(missing_field("ic.params.grid_axes", ps));
+    m.ic_grid_axes = jic_params["grid_axes"].get<std::vector<std::string>>();
+    if (m.ic_grid_axes.empty())
+        throw std::runtime_error(
+            "ModelManifest::load: 'ic_grid_axes' must not be empty in " + ps);
+
     // Kind-specific block
     if (!j.contains("stacked_ensemble") || !j["stacked_ensemble"].is_object())
         throw std::runtime_error(missing_field("stacked_ensemble", ps));
 
     const auto& jk = j["stacked_ensemble"];
     StackedEnsembleSpec spec;
-
-    // ic_grid_axes — sourced from the nested ic block (rope-registry shape:
-    // stacked_ensemble.ic = {kind, params: {grid_axes, file}}), not a
-    // top-level field. No fallback to a legacy top-level field: missing the
-    // nested block is a hard failure.
-    if (!jk.contains("ic") || !jk["ic"].is_object())
-        throw std::runtime_error(missing_field("stacked_ensemble.ic", ps));
-    const auto& jic = jk["ic"];
-    if (!jic.contains("params") || !jic["params"].is_object())
-        throw std::runtime_error(missing_field("stacked_ensemble.ic.params", ps));
-    const auto& jic_params = jic["params"];
-    if (!jic_params.contains("grid_axes") || !jic_params["grid_axes"].is_array())
-        throw std::runtime_error(missing_field("stacked_ensemble.ic.params.grid_axes", ps));
-    m.ic_grid_axes = jic_params["grid_axes"].get<std::vector<std::string>>();
-    if (m.ic_grid_axes.empty())
-        throw std::runtime_error(
-            "ModelManifest::load: 'ic_grid_axes' must not be empty in " + ps);
 
     if (!jk.contains("seq_len") || !jk["seq_len"].is_number_integer())
         throw std::runtime_error(missing_field("stacked_ensemble.seq_len", ps));

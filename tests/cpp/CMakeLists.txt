@@ -30,6 +30,8 @@ add_executable(rope_tests
     test_model_manifest.cpp
     test_grid_stitch.cpp
     test_kind_registry.cpp
+    test_ic_kind_registry.cpp
+    test_manifest_schema_fixtures.cpp
     test_forecast_grid_bin.cpp
     test_mapped_forecast_grid.cpp
 )
