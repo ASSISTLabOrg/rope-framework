@@ -1,8 +1,5 @@
 #pragma once
-// lookup_table_ic_source.h — IICSource backed by io::ICTable, for the
-// "ic_lookup_table" manifest ic.kind. Pure composition: owns an io::ICTable
-// and delegates both interface methods unchanged. ICTable/IcBin themselves
-// are not modified by this wrapper.
+// IICSource backed by io::ICTable (manifest ic.kind == "ic_lookup_table").
 
 #include "ic_source.h"
 #include "rope/io/ic_table.h"

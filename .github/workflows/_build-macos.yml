@@ -94,6 +94,7 @@ jobs:
         if: ${{ inputs.build_tests }}
         run: pytest tests/python/ -v
         env:
+          ROPE_LIB:         ${{ github.workspace }}/build/librope.dylib
           ROPE_EXE:         ${{ github.workspace }}/build/rope
           ROPE_FIXTURE_DIR: ${{ github.workspace }}/tests/fixtures
 

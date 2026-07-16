@@ -1,12 +1,4 @@
-// Drift test: feeds rope-registry's own fixture manifests through
-// ModelManifest::load() and checks the C++ parser's verdict agrees with
-// what rope-registry's schema/pytest suite asserts about each fixture.
-//
-// Deliberately NOT a blanket "run every fixture" test: some checks are
-// intentionally deferred past ModelManifest::load() to later factory
-// functions (e.g. ic.kind membership is checked by forecast::make_ic_source(),
-// not here — see invalid_ic_bad_kind.json below). Asserting those would
-// encode a wrong expectation, not catch a real gap.
+// Drift test: rope-registry fixtures vs ModelManifest::load().
 
 #include <catch2/catch_test_macros.hpp>
 #include "rope/io/model_manifest.h"

@@ -1,9 +1,5 @@
 #pragma once
-// ic_source_factory.h — construct an IICSource from the manifest's
-// top-level ic.kind string. Mirrors model_interface.h's make_model()/
-// ModelBackend dispatch pattern (IC-kind instead of model-backend), and
-// pipeline_registry.h's create_pipeline_for_kind()/known_kinds() pattern
-// one level up (pipeline-kind instead of ic-kind).
+// Constructs an IICSource from manifest.ic.kind.
 
 #include "ic_source.h"
 
@@ -19,7 +15,6 @@ std::unique_ptr<IICSource> make_ic_source(
     const std::filesystem::path& dir,
     const std::string&           ic_kind);
 
-// Inline so Cat A tests can call it without linking rope_forecast.
 inline std::vector<std::string> known_ic_kinds() {
     return {"ic_lookup_table"};
 }

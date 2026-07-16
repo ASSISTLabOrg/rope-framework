@@ -55,16 +55,10 @@ struct ModelManifest {
     // declares the grid it was trained/exported on.
     GridSpec grid;
 
-    // Parsed from manifest.ic.kind (top-level, kind-agnostic — see
-    // rope-registry/schemas/manifest-envelope.schema.json). Required; no
-    // default (only "ic_lookup_table" is registered today — see
-    // rope-registry/ic_kinds.json). Not validated here — forecast::
-    // make_ic_source() enforces the known-kind set, mirroring how backend
-    // strings are validated by parse_backend().
+    // manifest.ic.kind. Not validated here — see forecast::make_ic_source().
     std::string ic_kind;
 
-    // Parsed from manifest.ic.params.grid_axes (top-level, kind-agnostic —
-    // rope-registry shape: ic = {kind, params: {grid_axes, file}}).
+    // manifest.ic.params.grid_axes.
     std::vector<std::string> ic_grid_axes;
 
     // Present iff kind == "stacked_ensemble".

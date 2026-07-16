@@ -96,6 +96,7 @@ jobs:
           $env:Path = "${{ github.workspace }}\build\_deps\onnxruntime-src\lib;$env:Path"
           pytest tests/python/ -v
         env:
+          ROPE_LIB:         ${{ github.workspace }}\build\Release\librope.dll
           ROPE_EXE:         ${{ github.workspace }}\build\Release\rope.exe
           ROPE_FIXTURE_DIR: ${{ github.workspace }}\tests\fixtures
 

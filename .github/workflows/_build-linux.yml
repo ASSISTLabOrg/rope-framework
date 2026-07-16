@@ -96,6 +96,7 @@ jobs:
       - name: Test (Python)
         if: ${{ inputs.build_tests }}
         run: |
+          export ROPE_LIB="$(pwd)/build/librope.so"
           export ROPE_EXE="$(pwd)/build/rope"
           export ROPE_FIXTURE_DIR="$(pwd)/tests/fixtures"
           pytest tests/python/ -v

@@ -27,8 +27,11 @@ _project_root = Path(__file__).parent.parent.parent
 _default_exe  = _project_root / "build" / (
     "rope.exe" if sys.platform == "win32" else "rope"
 )
+_lib_ext      = {"win32": "dll", "darwin": "dylib"}.get(sys.platform, "so")
+_default_lib  = _project_root / "build" / f"librope.{_lib_ext}"
 
 ROPE_EXE    = os.environ.get("ROPE_EXE", str(_default_exe))
+ROPE_LIB    = os.environ.get("ROPE_LIB", str(_default_lib))
 FIXTURE_DIR = Path(os.environ.get("ROPE_FIXTURE_DIR",
                                    _project_root / "tests" / "fixtures"))
 
@@ -116,9 +119,8 @@ def test_rope_binding_forecast_uses_custom_cache_path(tmp_path):
     sys.path.insert(0, str(_project_root / "python"))
     from rope import Rope
 
-    _lib_ext = {"win32": "dll", "darwin": "dylib"}.get(sys.platform, "so")
-    lib_path = _project_root / "build" / f"librope.{_lib_ext}"
-    assert lib_path.is_file(), f"librope.{_lib_ext} not built"
+    lib_path = Path(ROPE_LIB)
+    assert lib_path.is_file(), f"{lib_path} not built"
 
     conf = tmp_path / "rope_binding.conf"
     _write_conf(conf)

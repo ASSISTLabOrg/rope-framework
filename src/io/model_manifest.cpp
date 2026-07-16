@@ -125,9 +125,7 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
                 "ModelManifest::load: 'grid.alt_min_km' must be < 'grid.alt_max_km' in " + ps);
     }
 
-    // ic — top-level, kind-agnostic (rope-registry shape: manifest.ic =
-    // {kind, params: {grid_axes, file}}). No fallback/default: missing
-    // either sub-field is a hard failure.
+    // ic
     if (!j.contains("ic") || !j["ic"].is_object())
         throw std::runtime_error(missing_field("ic", ps));
     const auto& jic = j["ic"];
