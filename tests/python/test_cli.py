@@ -116,8 +116,9 @@ def test_rope_binding_forecast_uses_custom_cache_path(tmp_path):
     sys.path.insert(0, str(_project_root / "python"))
     from rope import Rope
 
-    lib_path = _project_root / "build" / "librope.so"
-    assert lib_path.is_file(), "librope.so not built"
+    _lib_ext = {"win32": "dll", "darwin": "dylib"}.get(sys.platform, "so")
+    lib_path = _project_root / "build" / f"librope.{_lib_ext}"
+    assert lib_path.is_file(), f"librope.{_lib_ext} not built"
 
     conf = tmp_path / "rope_binding.conf"
     _write_conf(conf)

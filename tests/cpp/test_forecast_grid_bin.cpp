@@ -145,10 +145,12 @@ TEST_CASE("ForecastGridBinWriter: chunked writes produce a byte-identical file t
     auto ref_bytes = fs::file_size(ref_path);
     auto chunked_bytes = fs::file_size(chunked_path);
     REQUIRE(ref_bytes == chunked_bytes);
-    std::ifstream fa(ref_path, std::ios::binary), fb(chunked_path, std::ios::binary);
-    std::vector<char> a(std::istreambuf_iterator<char>(fa), {});
-    std::vector<char> b(std::istreambuf_iterator<char>(fb), {});
-    CHECK(a == b);
+    {
+        std::ifstream fa(ref_path, std::ios::binary), fb(chunked_path, std::ios::binary);
+        std::vector<char> a(std::istreambuf_iterator<char>(fa), {});
+        std::vector<char> b(std::istreambuf_iterator<char>(fb), {});
+        CHECK(a == b);
+    }
 
     fs::remove(ref_path);
     fs::remove(chunked_path);
