@@ -8,3 +8,4 @@ __pycache__
 _CPack_Packages/
 bin/
 obj/
+.venv/
