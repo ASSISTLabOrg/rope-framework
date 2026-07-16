@@ -1,14 +1,7 @@
 cmake_minimum_required(VERSION 4.2)
 project(ROPE VERSION 0.4.0 LANGUAGES CXX C)
 
-# Allow CI to inject the version from the git tag: -DROPE_RELEASE_VERSION=x.y.z
-# (Cannot use ROPE_VERSION — project() sets that to the hardcoded version above.)
-#
-# Strip before checking emptiness, and compare with STREQUAL rather than a
-# bare if(ROPE_RELEASE_VERSION): CMake's if() treats the literal string "0"
-# as false, so a bare check would silently skip validation (and any stray
-# whitespace from shell quoting would make an otherwise-empty value look
-# non-empty to that same bare check).
+# CI version override: -DROPE_RELEASE_VERSION=x.y.z (not ROPE_VERSION, which project() hardcodes).
 string(REGEX REPLACE "^v" "" ROPE_RELEASE_VERSION "${ROPE_RELEASE_VERSION}")
 string(STRIP "${ROPE_RELEASE_VERSION}" ROPE_RELEASE_VERSION)
 if(NOT ROPE_RELEASE_VERSION STREQUAL "")
@@ -65,8 +58,8 @@ FetchContent_Declare(
 )
 FetchContent_Declare(
     rope_registry
-    URL      https://github.com/AssistLabOrg/rope-registry/archive/refs/tags/v0.1.tar.gz
-    URL_HASH SHA256=dabb744006ec87a14858740fce4fac4060e3ebf7b1378e2e18015d6afb075f87
+    URL      https://github.com/AssistLabOrg/rope-registry/archive/refs/tags/v0.2.tar.gz
+    URL_HASH SHA256=c072969ee1dff2f01f5d40b54e03308b8e0debf7f9e3db1426651a37c6798ff1
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(nlohmann_json CLI11 rope_registry)
@@ -74,9 +67,7 @@ FetchContent_MakeAvailable(nlohmann_json CLI11 rope_registry)
 include(cmake/RopeHelpers.cmake)
 
 # ---------------------------------------------------------------------------
-# ONNX Runtime + LibTorch — acquired via cmake/Dependencies.cmake.
-# Set ROPE_DOWNLOAD_DEPS=ON to auto-fetch; or supply ONNXRUNTIME_ROOT /
-# ORT_INC / ORT_LIB / Torch_DIR manually.
+# ONNX Runtime + LibTorch (cmake/Dependencies.cmake; ROPE_DOWNLOAD_DEPS=ON to auto-fetch)
 # ---------------------------------------------------------------------------
 include(cmake/Dependencies.cmake)
 
@@ -109,11 +100,7 @@ endif()
 find_package(OpenMP)
 
 # ---------------------------------------------------------------------------
-# zlib — used only by ForecastZarrWriter's chunk compressor (io/forecast_zarr_writer.cpp).
-# Unlike NetCDF4/HDF5 (the format this replaced), zlib is a single, tiny,
-# near-universal system library — find_package via CMake's built-in FindZLIB
-# rather than a FetchContent source build, matching how this project treats
-# other omnipresent system facilities.
+# zlib — ForecastZarrWriter's chunk compressor (io/forecast_zarr_writer.cpp)
 # ---------------------------------------------------------------------------
 if(ROPE_USE_ZARR)
     find_package(ZLIB QUIET)
@@ -245,10 +232,7 @@ endif()
 add_library(rope SHARED
     src/capi/rope.cpp
 )
-# Force the "lib" prefix on every platform (CMake's Windows default omits it,
-# which would make the output "rope.dll" — colliding case-insensitively with
-# the managed "Rope.dll" wrapper assembly shipped alongside it in the NuGet
-# package). No-op on Linux/macOS, where "lib" is already the default.
+# Force "lib" prefix on all platforms (avoids Windows rope.dll colliding with the Rope.dll NuGet wrapper).
 set_target_properties(rope PROPERTIES PREFIX "lib")
 target_compile_definitions(rope PRIVATE ROPE_BUILDING_SHARED)
 target_link_libraries(rope
@@ -281,8 +265,7 @@ if(TARGET rope_forecast)
     target_compile_definitions(rope_exe PRIVATE ROPE_HAS_FORECAST)
 endif()
 rope_set_runtime_rpath(rope_exe)
-# Search both the standard tarball layout (bin/ + ../lib/) and a flat layout
-# (everything in one directory, as used by the NuGet contentFiles package).
+# Supports both the tarball layout (bin/ + ../lib/) and the flat NuGet layout.
 if(APPLE)
     set(_exe_install_rpath "@executable_path;@executable_path/../lib;@loader_path;@loader_path/../lib")
 else()
@@ -370,8 +353,7 @@ if(ROPE_MODELS_DIR AND EXISTS "${ROPE_MODELS_DIR}")
     install(DIRECTORY "${ROPE_MODELS_DIR}/" DESTINATION data/models/tiegcm-aurora-v1)
 endif()
 
-# Space-weather binary (bundled historical data; used as driver_path override
-# while the online CelesTrak conversion stub is pending).
+# Space-weather binary (bundled historical data; driver_path override until CelesTrak conversion lands).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data/drivers/sw_celestrack_1957.swbin")
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/drivers/sw_celestrack_1957.swbin"
         DESTINATION data/drivers)
