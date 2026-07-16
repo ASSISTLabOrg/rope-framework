@@ -93,8 +93,8 @@ jobs:
       - name: Test (Python)
         if: ${{ inputs.build_tests }}
         run: |
-          Write-Host "ROPE_LIB=$env:ROPE_LIB"
-          Write-Host "ROPE_EXE=$env:ROPE_EXE"
+          Write-Output "ROPE_LIB=$env:ROPE_LIB"
+          Write-Output "ROPE_EXE=$env:ROPE_EXE"
           Get-ChildItem -Path "build\Release" -Filter "*rope*" -ErrorAction SilentlyContinue
           $env:Path = "${{ github.workspace }}\build\_deps\onnxruntime-src\lib;$env:Path"
           pytest tests/python/ -v
