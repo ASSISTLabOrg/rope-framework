@@ -125,7 +125,7 @@ if(TARGET rope_forecast)
         )
         set_tests_properties(rope_cli_tests PROPERTIES
             ENVIRONMENT
-                "ROPE_EXE=$<TARGET_FILE:rope_exe>;ROPE_FIXTURE_DIR=${ROPE_FIXTURE_DIR}"
+                "ROPE_LIB=$<TARGET_FILE:rope>;ROPE_EXE=$<TARGET_FILE:rope_exe>;ROPE_FIXTURE_DIR=${ROPE_FIXTURE_DIR}"
         )
         if(Torch_FOUND)
             set_tests_properties(rope_cli_tests PROPERTIES
