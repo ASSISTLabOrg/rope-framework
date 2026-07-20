@@ -7,10 +7,7 @@
 
 namespace rope::forecast {
 
-// Sliding-window auto-regressive rollout.
-// Identical stepping logic to the former DynamicRollout, but backend-agnostic:
-// uses IModel::infer_into() (zero-copy IoBinding when supported) and falls back
-// to IModel::infer() for backends that return false from infer_into().
+// Sliding-window auto-regressive rollout
 class SlidingWindowRollout : public IRolloutStrategy {
 public:
     // K = latent_dim, S = seq_len, D = total_dim
@@ -46,13 +43,14 @@ public:
                 // Slide the window: inp[0:S-1] = inp[1:S]
                 std::copy(inp.begin() + D_, inp.begin() + S_ * D_, inp.begin());
 
-                // Fill last row: latents ← prediction, drivers ← x_chunk future
+                // Fill last row: latents ← prediction, drivers ← x_chunk[t]'s
+                // own driver — window t's last row is fcast_rows[t] (hour t),
+                // matching the hour t prediction just written into this row.
                 float* last_row = inp.data() + (S_ - 1) * D_;
                 std::copy(out_buf.begin(), out_buf.end(), last_row);
 
-                // x_chunk has H+1 windows; at t=H-1 this reads window H (valid).
                 const float* next_drv = x_chunk
-                    + static_cast<size_t>(t + 1) * S_ * D_
+                    + static_cast<size_t>(t) * S_ * D_
                     + static_cast<size_t>(S_ - 1) * D_
                     + K_;
                 std::copy(next_drv, next_drv + (D_ - K_), last_row + K_);

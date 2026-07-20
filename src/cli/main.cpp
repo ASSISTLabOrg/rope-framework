@@ -206,11 +206,14 @@ int main(int argc, char** argv) {
             auto fcfg = rope::forecast::config_from_reader(config, config_path.parent_path());
             auto pipeline = rope::forecast::load(fcfg);
 
+            // Output spans hour 0 (fc_start) through hour fc_horizon, inclusive.
+            const int total_steps = fc_horizon + 1;
+
             {
                 const int n_sig = 2 * pipeline->latent_dim() + 1;
                 const long long voxels = pipeline->grid_shape().voxels();
                 const int effective_chunk_hours =
-                    fcfg.decode_chunk_hours > 0 ? fcfg.decode_chunk_hours : fc_horizon;
+                    fcfg.decode_chunk_hours > 0 ? fcfg.decode_chunk_hours : total_steps;
                 const double est_mb = static_cast<double>(effective_chunk_hours) *
                                       n_sig * voxels * 4 * 2 / (1024.0 * 1024.0);
                 std::cerr << "rope forecast: decode_chunk_hours=" << fcfg.decode_chunk_hours
@@ -219,7 +222,7 @@ int main(int argc, char** argv) {
             }
 
             auto writer = rope::io::ForecastGridBinWriter::open(
-                pipeline->grid_shape(), fc_horizon, cache_path);
+                pipeline->grid_shape(), total_steps, cache_path);
 
 #ifdef ROPE_HAS_ZARR
             std::optional<rope::io::ForecastZarrWriter> zarr;
@@ -227,7 +230,7 @@ int main(int argc, char** argv) {
             if (!fc_zarr.empty()) {
                 latent_sink = [&](std::span<const float> latent_mean) {
                     zarr = rope::io::ForecastZarrWriter::open(
-                        pipeline->grid_shape(), fc_horizon, pipeline->latent_dim(),
+                        pipeline->grid_shape(), total_steps, pipeline->latent_dim(),
                         pipeline->model_kind(),
                         fc_start, fs::path{fc_zarr});
                     zarr->write_latent(latent_mean);

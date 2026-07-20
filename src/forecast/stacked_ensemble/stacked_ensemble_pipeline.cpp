@@ -343,9 +343,12 @@ void StackedEnsemblePipeline::run_streaming(
     const std::string& start_iso, int horizon, int chunk_hours,
     const GridChunkSink& sink, const LatentSink& latent_sink)
 {
+    // horizon is the number of autoregressive predictions beyond the given
+    // IC (hour 0). Output spans hour 0 through hour `horizon`, inclusive —
+    // H_lat = horizon + 1 timesteps total.
     const int H = horizon;
     const int S = S_;
-    if (chunk_hours <= 0) chunk_hours = H;
+    if (chunk_hours <= 0) chunk_hours = horizon + 1;
 
     std::vector<io::DriverRow> all_rows =
         io::DriverWindowBuilder::build(*sw_db_, start_iso, H + 1, S);
@@ -360,16 +363,17 @@ void StackedEnsemblePipeline::run_streaming(
     auto base_latents = run_base_rollout(x_chunk, H);
     auto [mu_lat, init_lat] = compute_mean_latents(x_chunk, base_latents, X_init, H);
 
-    // mu_lat's IC row (index 0) is dropped, matching the sink calls below.
+    // mu_lat is (H_lat, K) = (horizon + 1, K): the IC row (hour 0) followed
+    // by H predictions, aligned 1:1 with `times` below — the full
+    // trajectory, nothing dropped.
     if (latent_sink)
-        latent_sink(std::span(mu_lat).subspan(
-            static_cast<std::size_t>(K_), static_cast<std::size_t>(H) * K_));
+        latent_sink(std::span(mu_lat));
 
     const int H_lat  = H + 1;
     const int voxels = grid_shape_.voxels();
 
-    std::vector<std::int64_t> times(H);
-    for (int t = 1; t <= H; ++t) times[t - 1] = fcast_rows[t].tp;
+    std::vector<std::int64_t> times(H_lat);
+    for (int t = 0; t < H_lat; ++t) times[t] = fcast_rows[t].tp;
 
     if (compute_uncertainty_) {
         const int M = M_;
@@ -420,18 +424,11 @@ void StackedEnsemblePipeline::run_streaming(
             for (float& u : uncertainty)
                 u = std::sqrt(std::max(u, 0.0f));
 
-            // local_start drops the IC row from the first chunk only.
-            const int local_start = (t_lat == 0) ? 1 : 0;
-            const int t_offset    = t_lat - 1 + local_start;
-            const int count_out   = count_lat - local_start;
-            if (count_out > 0)
-                sink(t_offset,
-                     std::span(times).subspan(static_cast<std::size_t>(t_offset),
-                                              static_cast<std::size_t>(count_out)),
-                     std::span(density_mean).subspan(static_cast<std::size_t>(local_start) * voxels,
-                                                     static_cast<std::size_t>(count_out) * voxels),
-                     std::span(uncertainty).subspan(static_cast<std::size_t>(local_start) * voxels,
-                                                    static_cast<std::size_t>(count_out) * voxels));
+            sink(t_lat,
+                 std::span(times).subspan(static_cast<std::size_t>(t_lat),
+                                          static_cast<std::size_t>(count_lat)),
+                 std::span(density_mean),
+                 std::span(uncertainty));
         }
     } else {
         for (int t_lat = 0; t_lat < H_lat; t_lat += chunk_hours) {
@@ -447,17 +444,11 @@ void StackedEnsemblePipeline::run_streaming(
             }
             std::vector<float> uncertainty(static_cast<std::size_t>(count_lat) * voxels, 0.0f);
 
-            const int local_start = (t_lat == 0) ? 1 : 0;
-            const int t_offset    = t_lat - 1 + local_start;
-            const int count_out   = count_lat - local_start;
-            if (count_out > 0)
-                sink(t_offset,
-                     std::span(times).subspan(static_cast<std::size_t>(t_offset),
-                                              static_cast<std::size_t>(count_out)),
-                     std::span(density).subspan(static_cast<std::size_t>(local_start) * voxels,
-                                                static_cast<std::size_t>(count_out) * voxels),
-                     std::span(uncertainty).subspan(static_cast<std::size_t>(local_start) * voxels,
-                                                    static_cast<std::size_t>(count_out) * voxels));
+            sink(t_lat,
+                 std::span(times).subspan(static_cast<std::size_t>(t_lat),
+                                          static_cast<std::size_t>(count_lat)),
+                 std::span(density),
+                 std::span(uncertainty));
         }
     }
 }

@@ -59,6 +59,8 @@ Driver data resolution: explicit `driver_path` → `DriverCacheManager::get_path
 
 ## `run_streaming(start_iso, H, chunk_hours, sink, latent_sink)` — step by step
 
+`H` here is the CLI's `--horizon` value: the number of autoregressive predictions beyond the given IC at `start_iso`. Output — `mu_lat`, `times`, and everything delivered to `sink` — spans hour 0 (`start_iso` itself, the IC) through hour `H`, inclusive: `H+1` timesteps total. `ForecastGridBinWriter`/`ForecastZarrWriter` are opened with `H+1`, not `H`.
+
 ### Step 1: Build the driver window
 
 ```cpp
@@ -103,7 +105,9 @@ Each base model runs `SlidingWindowRollout::run(model, x_chunk, H, out)` indepen
 Rollout loop (`t = 1..H`):
 1. Feed `inp (S, D)` → model → `pred (K)`  [normalized latent]
 2. Store `pred` at `out[(t-1)*K]`
-3. If `t < H`: slide window — `inp[0:S-1] ← inp[1:S]`, `last_row.latent ← pred`, `last_row.driver ← x_chunk[t+1] drivers`
+3. If `t < H`: slide window — `inp[0:S-1] ← inp[1:S]`, `last_row.latent ← pred`, `last_row.driver ← x_chunk[t] drivers`
+
+`x_chunk[t]`'s last row is `fcast_rows[t]` (hour `t`) — the same hour as `pred`, so the appended row is internally consistent (state and driver both describe hour `t`). `x_chunk[H]` (built from `fcast_rows[H]`) is never read by the rollout: the last slide happens at `t = H-1` and reads `x_chunk[H-1]`.
 
 `try_infer_into()` on ONNX models binds I/O buffers once per rollout to avoid per-step allocation.
 
@@ -127,7 +131,7 @@ mu_lat (H+1, K):
     mu_lat[1..H] = meta_mean_norm    // H model predictions
 ```
 
-`latent_sink`, if passed, fires here once with `mu_lat[K..(H+1)*K)` (IC row dropped), before Step 7.
+`latent_sink`, if passed, fires here once with the full `mu_lat` (all `H+1` rows, IC included), before Step 7.
 
 ### Step 7: Decode — the only chunked step
 
@@ -146,7 +150,7 @@ density_mean, uncertainty = weighted mean/variance over dens_sigmas via ut.Wm/ut
 
 ### Step 8: Deliver each chunk to `sink`
 
-The first chunk (`t_lat==0`) drops its IC row before delivery, so it may emit one fewer row than `chunk_hours`. `t_offset` is H-indexed, matching `ForecastGrid::density`/`uncertainty`/`times`. Chunks arrive in increasing, contiguous order summing to `H`. `rope forecast` feeds each chunk straight to `ForecastGridBinWriter`/`ForecastZarrWriter`; the full grid is never held in memory.
+Every row of `mu_lat`/`times` (hour 0 through hour `H`, inclusive — `H+1` rows total) is delivered; nothing is dropped. `t_offset` matches `mu_lat`'s row index, which also matches `ForecastGrid::density`/`uncertainty`/`times`. Chunks arrive in increasing, contiguous order summing to `H+1`. `rope forecast` feeds each chunk straight to `ForecastGridBinWriter`/`ForecastZarrWriter` (both opened with `horizon+1` timesteps); the full grid is never held in memory.
 
 ---
 

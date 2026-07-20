@@ -225,7 +225,7 @@ def test_second_forecast_discards_first(tmp_path):
     conf  = tmp_path / "rope.conf"
     _write_conf(conf)
 
-    # horizon=3 -> window covers 2024-01-01T01:00:00 .. 03:00:00
+    # horizon=3 -> window covers 2024-01-01T00:00:00 .. 03:00:00
     first = _rope(
         "--cache-path", cache, "forecast",
         "--start", FORECAST_START, "--horizon", "3", "--config", str(conf),
@@ -239,7 +239,7 @@ def test_second_forecast_discards_first(tmp_path):
     )
     assert probe_a.returncode == 0, "sanity check: first forecast's window must include late_time"
 
-    # horizon=1 -> window covers only 2024-01-01T01:00:00
+    # horizon=1 -> window covers 2024-01-01T00:00:00 .. 01:00:00
     second = _rope(
         "--cache-path", cache, "forecast",
         "--start", FORECAST_START, "--horizon", "1", "--config", str(conf),

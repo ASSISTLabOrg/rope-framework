@@ -77,19 +77,22 @@ public:
     virtual ~Pipeline() = default;
 
     // Collects run_streaming() into one in-memory ForecastGrid.
-    // latent_mean_out, when non-null, is filled with the (H, latent_dim) latent trajectory.
+    // Output spans hour 0 (start_iso) through hour `horizon`, inclusive —
+    // H_lat = horizon + 1 timesteps total.
+    // latent_mean_out, when non-null, is filled with the (H_lat, latent_dim) latent trajectory.
     ForecastGrid run(const std::string& start_iso, int horizon,
                      std::vector<float>* latent_mean_out = nullptr)
     {
+        const int H_lat = horizon + 1;
         ForecastGrid grid;
         grid.shape = grid_shape();
-        grid.H = horizon;
+        grid.H = H_lat;
         const std::size_t voxels = static_cast<std::size_t>(grid.shape.voxels());
-        grid.times.resize(static_cast<std::size_t>(horizon));
-        grid.density.resize(static_cast<std::size_t>(horizon) * voxels);
-        grid.uncertainty.resize(static_cast<std::size_t>(horizon) * voxels);
+        grid.times.resize(static_cast<std::size_t>(H_lat));
+        grid.density.resize(static_cast<std::size_t>(H_lat) * voxels);
+        grid.uncertainty.resize(static_cast<std::size_t>(H_lat) * voxels);
 
-        run_streaming(start_iso, horizon, /*chunk_hours=*/horizon,
+        run_streaming(start_iso, horizon, /*chunk_hours=*/H_lat,
             [&](int t_offset, std::span<const std::int64_t> times,
                 std::span<const float> density, std::span<const float> uncertainty) {
                 std::copy(times.begin(), times.end(), grid.times.begin() + t_offset);

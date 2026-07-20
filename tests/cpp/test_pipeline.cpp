@@ -19,6 +19,8 @@ static rope::forecast::Config make_test_config() {
 
 static const char* TEST_START = "2024-01-01 00:00:00";
 static constexpr int TEST_HORIZON = 3;
+// run()'s output spans hour 0 through hour TEST_HORIZON, inclusive.
+static constexpr int TEST_H_LAT = TEST_HORIZON + 1;
 
 TEST_CASE("Pipeline: loads successfully from synthetic fixtures") {
     auto pipe = rope::forecast::load(make_test_config());
@@ -29,10 +31,10 @@ TEST_CASE("Pipeline: run() returns correctly shaped ForecastGrid") {
     auto pipe = rope::forecast::load(make_test_config());
     auto grid = pipe->run(TEST_START, TEST_HORIZON);
 
-    CHECK(grid.H == TEST_HORIZON);
-    CHECK(static_cast<int>(grid.density.size())     == TEST_HORIZON * grid.shape.voxels());
-    CHECK(static_cast<int>(grid.uncertainty.size()) == TEST_HORIZON * grid.shape.voxels());
-    CHECK(static_cast<int>(grid.times.size())       == TEST_HORIZON);
+    CHECK(grid.H == TEST_H_LAT);
+    CHECK(static_cast<int>(grid.density.size())     == TEST_H_LAT * grid.shape.voxels());
+    CHECK(static_cast<int>(grid.uncertainty.size()) == TEST_H_LAT * grid.shape.voxels());
+    CHECK(static_cast<int>(grid.times.size())       == TEST_H_LAT);
 }
 
 TEST_CASE("Pipeline: density is positive everywhere") {
@@ -91,10 +93,10 @@ TEST_CASE("Pipeline: M=3 small ensemble produces correctly shaped ForecastGrid")
     REQUIRE(pipe != nullptr);
 
     auto grid = pipe->run(TEST_START, TEST_HORIZON);
-    CHECK(grid.H == TEST_HORIZON);
-    CHECK(static_cast<int>(grid.density.size())     == TEST_HORIZON * grid.shape.voxels());
-    CHECK(static_cast<int>(grid.uncertainty.size()) == TEST_HORIZON * grid.shape.voxels());
-    CHECK(static_cast<int>(grid.times.size())       == TEST_HORIZON);
+    CHECK(grid.H == TEST_H_LAT);
+    CHECK(static_cast<int>(grid.density.size())     == TEST_H_LAT * grid.shape.voxels());
+    CHECK(static_cast<int>(grid.uncertainty.size()) == TEST_H_LAT * grid.shape.voxels());
+    CHECK(static_cast<int>(grid.times.size())       == TEST_H_LAT);
     for (float d : grid.density)
         CHECK(d > 0.0f);
 }
@@ -113,21 +115,23 @@ TEST_CASE("Pipeline: split-decoder stages land in correct altitude ranges") {
     auto pipe = rope::forecast::load(cfg);
     REQUIRE(pipe != nullptr);
 
-    auto grid = pipe->run(TEST_START, 1);  // H=1; one frame is enough
-    REQUIRE(grid.H == 1);
-    REQUIRE(static_cast<int>(grid.density.size()) == grid.shape.voxels());
+    auto grid = pipe->run(TEST_START, 1);  // horizon=1; hours 0..1, two frames
+    REQUIRE(grid.H == 2);
+    REQUIRE(static_cast<int>(grid.density.size()) == 2 * grid.shape.voxels());
 
     const int n_lst = grid.shape.n_lst, n_lat = grid.shape.n_lat, n_alt = grid.shape.n_alt;
+    const int voxels = grid.shape.voxels();
     bool lo_ok = true, hi_ok = true;
-    for (int lst = 0; lst < n_lst && (lo_ok || hi_ok); ++lst)
-        for (int lat = 0; lat < n_lat && (lo_ok || hi_ok); ++lat) {
-            const float* col = grid.density.data()
-                               + (lst * n_lat + lat) * n_alt;
-            for (int alt = 0;     alt < SPLIT;  ++alt)
-                if (col[alt] != 1.0f)  { lo_ok = false; break; }
-            for (int alt = SPLIT; alt < n_alt;   ++alt)
-                if (col[alt] != 10.0f) { hi_ok = false; break; }
-        }
+    for (int t = 0; t < grid.H && (lo_ok || hi_ok); ++t)
+        for (int lst = 0; lst < n_lst && (lo_ok || hi_ok); ++lst)
+            for (int lat = 0; lat < n_lat && (lo_ok || hi_ok); ++lat) {
+                const float* col = grid.density.data()
+                                   + t * voxels + (lst * n_lat + lat) * n_alt;
+                for (int alt = 0;     alt < SPLIT;  ++alt)
+                    if (col[alt] != 1.0f)  { lo_ok = false; break; }
+                for (int alt = SPLIT; alt < n_alt;   ++alt)
+                    if (col[alt] != 10.0f) { hi_ok = false; break; }
+            }
     CHECK(lo_ok);
     CHECK(hi_ok);
 }

@@ -29,18 +29,21 @@ static const char* TEST_START = "2024-01-01 00:00:00";
 constexpr int TEST_HORIZON = 20;
 
 // Collects run_streaming()'s chunks into one flat ForecastGrid.
+// horizon is hours beyond the given IC; output spans hour 0..horizon
+// inclusive, i.e. horizon+1 timesteps.
 rope::ForecastGrid collect(rope::forecast::Pipeline& pipe, const std::string& start,
                           int horizon, int chunk_hours,
                           std::vector<float>* latent_mean_out = nullptr,
                           std::vector<std::pair<int,int>>* chunk_log = nullptr)
 {
+    const int H_lat = horizon + 1;
     rope::ForecastGrid grid;
     grid.shape = pipe.grid_shape();
-    grid.H = horizon;
+    grid.H = H_lat;
     const std::size_t voxels = static_cast<std::size_t>(grid.shape.voxels());
-    grid.times.resize(static_cast<std::size_t>(horizon));
-    grid.density.resize(static_cast<std::size_t>(horizon) * voxels);
-    grid.uncertainty.resize(static_cast<std::size_t>(horizon) * voxels);
+    grid.times.resize(static_cast<std::size_t>(H_lat));
+    grid.density.resize(static_cast<std::size_t>(H_lat) * voxels);
+    grid.uncertainty.resize(static_cast<std::size_t>(H_lat) * voxels);
 
     pipe.run_streaming(start, horizon, chunk_hours,
         [&](int t_offset, std::span<const std::int64_t> times,
@@ -88,7 +91,7 @@ TEST_CASE("Streaming: off-by-one chunk boundaries produce correct, contiguous t_
         next_expected += count;
         total += count;
     }
-    CHECK(total == 10);
+    CHECK(total == 11);
 }
 
 TEST_CASE("Streaming: chunk_hours=1 covers every hour exactly once") {
@@ -96,18 +99,18 @@ TEST_CASE("Streaming: chunk_hours=1 covers every hour exactly once") {
     std::vector<std::pair<int,int>> chunks;
     auto grid = collect(*pipe, TEST_START, 5, 1, nullptr, &chunks);
 
-    CHECK(chunks.size() == 5);
+    CHECK(chunks.size() == 6);
     int next_expected = 0;
     for (auto [t_offset, count] : chunks) {
         CHECK(t_offset == next_expected);
         CHECK(count == 1);
         next_expected += count;
     }
-    CHECK(grid.H == 5);
+    CHECK(grid.H == 6);
     for (float d : grid.density) CHECK(d > 0.0f);
 }
 
-TEST_CASE("Streaming: latent_sink delivers the (H, K) fused latent trajectory exactly once, before any chunk") {
+TEST_CASE("Streaming: latent_sink delivers the (H_lat, K) fused latent trajectory exactly once, before any chunk") {
     auto pipe = rope::forecast::load(make_config(true));
     std::vector<float> latent_mean;
     int latent_calls = 0;
@@ -126,7 +129,7 @@ TEST_CASE("Streaming: latent_sink delivers the (H, K) fused latent trajectory ex
 
     CHECK(latent_calls == 1);
     CHECK(latent_seen_before_first_chunk);
-    CHECK(static_cast<int>(latent_mean.size()) == TEST_HORIZON * pipe->latent_dim());
+    CHECK(static_cast<int>(latent_mean.size()) == (TEST_HORIZON + 1) * pipe->latent_dim());
 }
 
 TEST_CASE("Streaming: latent_mean via run_streaming() matches Pipeline::run()'s latent_mean_out") {
