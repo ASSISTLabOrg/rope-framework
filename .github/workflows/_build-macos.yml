@@ -19,6 +19,11 @@ on:
         description: "Set up the .NET 8 SDK and run the C# test suite"
         required: true
         type: boolean
+      dotnet_pack_smoke:
+        description: "Run a dotnet pack smoke check (CI-only; release.yml has its own pack-dotnet job)"
+        required: false
+        type: boolean
+        default: false
       save_cache:
         description: "Save the deps cache after a successful build"
         required: true
@@ -56,7 +61,7 @@ jobs:
           brew install libomp
 
       - name: Setup .NET 8 SDK
-        if: ${{ inputs.run_dotnet_tests }}
+        if: ${{ inputs.run_dotnet_tests || inputs.dotnet_pack_smoke }}
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
@@ -89,6 +94,7 @@ jobs:
         if: ${{ inputs.build_tests }}
         run: pytest tests/python/ -v
         env:
+          ROPE_LIB:         ${{ github.workspace }}/build/librope.dylib
           ROPE_EXE:         ${{ github.workspace }}/build/rope
           ROPE_FIXTURE_DIR: ${{ github.workspace }}/tests/fixtures
 
@@ -100,11 +106,46 @@ jobs:
           ROPE_EXE:         ${{ github.workspace }}/build/rope
           ROPE_FIXTURE_DIR: ${{ github.workspace }}/tests/fixtures
 
+      - name: Pack (C#)
+        if: ${{ inputs.dotnet_pack_smoke }}
+        run: |
+          cmake --install build --prefix /tmp/pack-smoke-install
+          mkdir -p /tmp/pack-smoke-native
+          cp /tmp/pack-smoke-install/bin/rope /tmp/pack-smoke-native/rope-osx.bin
+          cp /tmp/pack-smoke-install/lib/*.dylib /tmp/pack-smoke-native/
+          dotnet pack dotnet/Rope.csproj -c Release -o nupkg \
+            -p:Version=0.0.0-packsmoke \
+            -p:RopeNativeDir=/tmp/pack-smoke-native
+
+      - name: Pack smoke test (consume)
+        if: ${{ inputs.dotnet_pack_smoke }}
+        run: |
+          cat > /tmp/pack-smoke-rope.conf <<CONF
+          [paths]
+          exported_dir = ${{ github.workspace }}/tests/fixtures/test_models
+          driver_path  = ${{ github.workspace }}/tests/fixtures/test_models/sw_test.swbin
+          [server]
+          idle_timeout_seconds = 30
+          CONF
+
+          dotnet restore tests/dotnet/PackSmokeConsumer/PackSmokeConsumer.csproj \
+            -p:RopeSmokeTestVersion=0.0.0-packsmoke \
+            -p:RestoreAdditionalProjectSources="${{ github.workspace }}/nupkg"
+
+          dotnet build tests/dotnet/PackSmokeConsumer/PackSmokeConsumer.csproj -c Release --no-restore
+
+          for tfm in net48 net8.0; do
+            test -f "tests/dotnet/PackSmokeConsumer/bin/Release/$tfm/librope.dylib" || {
+              echo "::error::librope.dylib missing from $tfm build output — packaging regression"
+              exit 1
+            }
+          done
+
+          dotnet tests/dotnet/PackSmokeConsumer/bin/Release/net8.0/PackSmokeConsumer.dll /tmp/pack-smoke-rope.conf
+
       - name: Package
         run: cpack --config build/CPackConfig.cmake
 
-      # Save cache only on main — feature branches restore but never write,
-      # so total cache entries stay capped at one per variant.
       - name: Save deps cache
         if: always() && inputs.save_cache
         uses: actions/cache/save@v4

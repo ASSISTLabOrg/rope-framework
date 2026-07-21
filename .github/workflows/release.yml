@@ -5,11 +5,6 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
-    inputs:
-      test_all_platforms:
-        description: "Run tests on all platforms (not just Linux cpu)"
-        type: boolean
-        default: true
 
 jobs:
   build-linux:
@@ -32,7 +27,7 @@ jobs:
     with:
       hardware: cpu
       use_libtorch: true
-      build_tests: ${{ inputs.test_all_platforms == true || github.event_name == 'push' }}
+      build_tests: true
       run_dotnet_tests: true
       save_cache: true
       release_version: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
@@ -46,8 +41,8 @@ jobs:
     with:
       hardware: cuda12
       use_libtorch: false
-      build_tests: ${{ inputs.test_all_platforms == true || github.event_name == 'push' }}
-      run_dotnet_tests: false
+      build_tests: true
+      run_dotnet_tests: true
       save_cache: true
       release_version: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
       package_suffix: linux-x86_64-cuda12
@@ -60,7 +55,7 @@ jobs:
     with:
       hardware: cpu
       use_libtorch: true
-      build_tests: ${{ inputs.test_all_platforms == true || github.event_name == 'push' }}
+      build_tests: true
       run_dotnet_tests: true
       save_cache: true
       release_version: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
@@ -74,7 +69,7 @@ jobs:
     with:
       hardware: cuda12
       use_libtorch: false
-      build_tests: ${{ inputs.test_all_platforms == true || github.event_name == 'push' }}
+      build_tests: true
       run_dotnet_tests: true
       save_cache: true
       release_version: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
@@ -82,15 +77,9 @@ jobs:
       artifact_name: rope-windows-x64-cuda12
       cache_key: deps-windows-x64-cuda12-ort1.25.0
 
-  # ── .NET package ─────────────────────────────────────────────────────────
-  # Merges the Linux and Windows cpu binaries into one RopeFramework nupkg
-  # (Rope.cs picks the right native binary at runtime by filename, so a
-  # single contentFiles payload can serve both OSes). macOS is intentionally
-  # excluded: its `rope` CLI binary has the same filename as Linux's `rope`
-  # but isn't interchangeable, and Rope.cs doesn't yet disambiguate them.
   pack-dotnet:
     name: Pack .NET (NuGet)
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-macos-arm64]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -106,16 +95,22 @@ jobs:
         with:
           name: rope-windows-x64-cpu
           path: artifacts/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: rope-macos-arm64-cpu
+          path: artifacts/macos
 
       - name: Extract native binaries
         run: |
           mkdir -p native
           tar -xzf artifacts/linux/rope_framework-*.tar.gz -C artifacts/linux
           unzip -q artifacts/windows/rope_framework-*.zip -d artifacts/windows
-          find artifacts/linux   -path '*/lib/librope.so' -exec cp {} native/ \;
-          find artifacts/linux   -path '*/bin/rope'       -exec cp {} native/ \;
-          find artifacts/windows -path '*/bin/rope.dll'   -exec cp {} native/ \;
-          find artifacts/windows -path '*/bin/rope.exe'   -exec cp {} native/ \;
+          tar -xzf artifacts/macos/rope_framework-*.tar.gz -C artifacts/macos
+          find artifacts/linux   -path '*/lib/*.so*'           -exec cp {} native/ \;
+          find artifacts/macos   -path '*/lib/*.dylib'         -exec cp {} native/ \;
+          find artifacts/linux   -path '*/bin/rope'            -exec cp {} native/rope.bin \;
+          find artifacts/macos   -path '*/bin/rope'            -exec cp {} native/rope-osx.bin \;
+          find artifacts/windows -path '*/bin/*' \( -iname '*.dll' -o -iname '*.exe' \) -exec cp {} native/ \;
           ls native/
 
       - name: Pack
@@ -139,7 +134,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write    # required to delete staging artifacts
+      actions: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -155,15 +150,13 @@ jobs:
 
             The following directories are not included in the release archives and must be downloaded separately:
 
-            - `models/` — model artifacts
-            - `data/` — drivers, IC table, and normalisation statistics
+            - `data/models/` — model artifacts
+            - `data/drivers/` — driver/space-weather data
 
             **Downloads:** [Google Drive](https://drive.google.com/drive/folders/1gVQ0gqzwfKDaZIuT8tWoCyWQOL_hT4Ol?usp=drive_link)
 
             Place both folders alongside the extracted archive before running the server.
 
-      # Staging artifacts have been published to the release; delete them
-      # immediately rather than waiting out the 1-day retention window.
       - name: Delete staging artifacts
         uses: actions/github-script@v7
         with:

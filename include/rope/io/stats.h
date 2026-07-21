@@ -18,9 +18,7 @@
 
 namespace rope::io {
 
-// ---------------------------------------------------------------------------
-// Stats — raw statistics blob (mu + sigma over a flat shape).
-// ---------------------------------------------------------------------------
+// Raw statistics blob (mu + sigma over a flat shape).
 struct Stats {
     std::vector<std::uint32_t> shape;
     std::vector<float>         mu;
@@ -54,11 +52,7 @@ struct Stats {
     }
 };
 
-// ---------------------------------------------------------------------------
-// FeatureNormalizer — z-score normalizer for the time-series feature vector.
-//
-// Feature layout: [latent_0 … latent_{K-1}, driver_0 … driver_{D-K-1}]
-// ---------------------------------------------------------------------------
+// Z-score normalizer for the time-series feature vector: [latent_0…latent_{K-1}, driver_0…driver_{D-K-1}].
 class FeatureNormalizer {
 public:
     FeatureNormalizer(const Stats& stats, int latent_dim)
@@ -105,13 +99,7 @@ private:
     std::vector<float> mu_, sigma_;
 };
 
-// ---------------------------------------------------------------------------
-// CAEDenormalizer — converts decoder output (log10 space) to physical density.
-//
-//   density = 10 ^ (decoder_output × sigma + mu)
-//
-// Stats may be scalar (shape [1]) or spatial (shape [1, 72, 36, 45]).
-// ---------------------------------------------------------------------------
+// Converts decoder output (log10 space) to density: 10^(x*sigma+mu). Stats may be scalar or spatial.
 class CAEDenormalizer {
 public:
     explicit CAEDenormalizer(const Stats& stats)

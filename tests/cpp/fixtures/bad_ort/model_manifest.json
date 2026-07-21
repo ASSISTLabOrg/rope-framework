@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "kind": "stacked_ensemble",
+  "runtime_requirements": {
+    "onnxruntime": "0.0"
+  },
+  "latent_dim": 10,
+  "driver_columns": [
+    "f10",
+    "kp",
+    "t1",
+    "t2",
+    "t3",
+    "t4"
+  ],
+  "driver_source": "celestrak_sw",
+  "validated": false,
+  "grid": {
+    "n_lst": 72,
+    "n_lat": 36,
+    "n_alt": 45,
+    "lat_min_deg": -87.5,
+    "lat_max_deg": 87.5,
+    "alt_min_km": 100.0,
+    "alt_max_km": 980.0
+  },
+  "ic": {
+    "kind": "ic_lookup_table",
+    "params": {
+      "grid_axes": [
+        "f10",
+        "kp"
+      ],
+      "file": "ic_table.icbin"
+    }
+  },
+  "stacked_ensemble": {
+    "seq_len": 3,
+    "decode_batch_size": 120,
+    "base_models": [
+      {
+        "file": "base_model_00.onnx",
+        "backend": "onnx",
+        "architecture": "lstm",
+        "inter_op_threads": 1
+      }
+    ],
+    "meta_model": {
+      "file": "meta_model.onnx",
+      "backend": "onnx"
+    },
+    "decoders": [
+      {
+        "backends": {
+          "onnx": "coae_decoder.onnx"
+        },
+        "stats": "stats_cae.bin",
+        "alt_start": 0,
+        "alt_end": 45
+      }
+    ]
+  }
+}

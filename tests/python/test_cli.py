@@ -1,8 +1,10 @@
 """
 Category C — end-to-end CLI integration tests.
 
-Exercises the full rope pipeline: server spawn, forecast, single-point query,
-batch query, idle timeout, and clean shutdown — all via the rope CLI binary.
+Exercises the full rope pipeline: forecast (writes the cache file), single-
+point query, batch query, and error paths -- all via the rope CLI binary.
+No server process, no sockets: `rope forecast` runs inference directly and
+writes a cache file; `rope get` reads it (memory-mapped).
 
 Required env vars (injected by CTest; fall back to sensible defaults for
 manual runs from the build directory):
@@ -25,8 +27,11 @@ _project_root = Path(__file__).parent.parent.parent
 _default_exe  = _project_root / "build" / (
     "rope.exe" if sys.platform == "win32" else "rope"
 )
+_lib_ext      = {"win32": "dll", "darwin": "dylib"}.get(sys.platform, "so")
+_default_lib  = _project_root / "build" / f"librope.{_lib_ext}"
 
 ROPE_EXE    = os.environ.get("ROPE_EXE", str(_default_exe))
+ROPE_LIB    = os.environ.get("ROPE_LIB", str(_default_lib))
 FIXTURE_DIR = Path(os.environ.get("ROPE_FIXTURE_DIR",
                                    _project_root / "tests" / "fixtures"))
 
@@ -45,61 +50,58 @@ def _rope(*args, timeout=60):
     )
 
 
-def _write_conf(path: Path, idle_timeout_seconds: int = 30) -> None:
+def _write_conf(path: Path, exported_dir=None) -> None:
     # driver_path: explicit binary fixture — bypasses cache manager entirely.
     # ic_csv is no longer set: the IC table is auto-discovered from exported_dir
     # (test_models/ic_table.icbin, generated alongside the other fixtures).
+    exported_dir = exported_dir or (FIXTURE_DIR / "test_models")
     path.write_text(
         f"[paths]\n"
-        f"exported_dir = {FIXTURE_DIR / 'test_models'}\n"
+        f"exported_dir = {exported_dir}\n"
         f"driver_path  = {FIXTURE_DIR / 'test_models' / 'sw_test.swbin'}\n"
-        f"[server]\n"
-        f"idle_timeout_seconds = {idle_timeout_seconds}\n"
     )
 
 
 # ---------------------------------------------------------------------------
-# Module-scoped server fixture — one server shared across most tests.
+# Module-scoped forecast-cache fixture — one cache file shared across most
+# tests. No teardown needed: there is no process to stop, just a file.
 # ---------------------------------------------------------------------------
 
-class _Server:
-    def __init__(self, sock: str, conf: str):
-        self.sock = sock
+class _ForecastCache:
+    def __init__(self, cache_path: str, conf: str):
+        self.cache_path = cache_path
         self.conf = conf
 
     def run(self, *args, timeout=60):
-        return _rope("--socket", self.sock, *args, timeout=timeout)
+        return _rope("--cache-path", self.cache_path, *args, timeout=timeout)
 
 
 @pytest.fixture(scope="module")
-def server(tmp_path_factory):
-    tmp  = tmp_path_factory.mktemp("rope_cli")
-    sock = str(tmp / "rope.sock")
-    conf = tmp / "rope.conf"
+def forecast_cache(tmp_path_factory):
+    tmp   = tmp_path_factory.mktemp("rope_cli")
+    cache = str(tmp / "forecast_grid.bin")
+    conf  = tmp / "rope.conf"
     _write_conf(conf)
 
     result = _rope(
-        "--socket", sock, "forecast",
+        "--cache-path", cache, "forecast",
         "--start", FORECAST_START, "--horizon", str(FORECAST_HORIZON),
         "--config", str(conf),
     )
-    assert result.returncode == 0, f"server startup failed:\n{result.stderr}"
+    assert result.returncode == 0, f"forecast failed:\n{result.stderr}"
 
-    srv = _Server(sock, str(conf))
-    yield srv
-
-    _rope("--socket", sock, "exit", timeout=10)
+    yield _ForecastCache(cache, str(conf))
 
 
 # ---------------------------------------------------------------------------
 # forecast
 # ---------------------------------------------------------------------------
 
-def test_forecast_returns_ok(server):
-    result = server.run(
+def test_forecast_returns_ok(forecast_cache):
+    result = forecast_cache.run(
         "forecast",
         "--start", FORECAST_START, "--horizon", str(FORECAST_HORIZON),
-        "--config", server.conf,
+        "--config", forecast_cache.conf,
     )
     assert result.returncode == 0
     data = json.loads(result.stdout.strip().splitlines()[-1])
@@ -108,12 +110,41 @@ def test_forecast_returns_ok(server):
     assert "window_end"   in data
 
 
+def test_rope_binding_forecast_uses_custom_cache_path(tmp_path):
+    """Regression test: Rope.forecast() must pass --cache-path when a custom
+    cache_path is configured -- otherwise it silently falls back to the
+    default per-user cache file, which could read/write state unrelated to
+    this Rope instance.
+    """
+    sys.path.insert(0, str(_project_root / "python"))
+    from rope import Rope
+
+    lib_path = Path(ROPE_LIB)
+    assert lib_path.is_file(), f"{lib_path} not built"
+
+    conf = tmp_path / "rope_binding.conf"
+    _write_conf(conf)
+    custom_cache = str(tmp_path / "custom_forecast_grid.bin")
+
+    r = Rope(lib_path=lib_path, exe_path=Path(ROPE_EXE), cache_path=custom_cache, config_path=conf)
+    result = r.forecast(FORECAST_START, FORECAST_HORIZON)
+    assert result["status"] == "ok"
+
+    # The cache file must actually have been written at the custom path (not
+    # the default per-user one) -- reading it directly via the CLI proves it.
+    probe = _rope(
+        "--cache-path", custom_cache, "get", "--mode", "interp",
+        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
+    )
+    assert probe.returncode == 0
+
+
 # ---------------------------------------------------------------------------
 # get — single point
 # ---------------------------------------------------------------------------
 
-def test_get_interp_returns_valid_point(server):
-    result = server.run(
+def test_get_interp_returns_valid_point(forecast_cache):
+    result = forecast_cache.run(
         "get", "--mode", "interp",
         "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
     )
@@ -123,8 +154,8 @@ def test_get_interp_returns_valid_point(server):
     assert data["uncertainty"] >= 0
 
 
-def test_get_hold_returns_valid_point(server):
-    result = server.run(
+def test_get_hold_returns_valid_point(forecast_cache):
+    result = forecast_cache.run(
         "get", "--mode", "hold",
         "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
     )
@@ -134,8 +165,8 @@ def test_get_hold_returns_valid_point(server):
     assert data["uncertainty"] >= 0
 
 
-def test_get_time_out_of_range_fails(server):
-    result = server.run(
+def test_get_time_out_of_range_fails(forecast_cache):
+    result = forecast_cache.run(
         "get", "--mode", "interp",
         "--time", "2030-01-01T00:00:00",
         "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
@@ -144,11 +175,22 @@ def test_get_time_out_of_range_fails(server):
     assert result.returncode != 0
 
 
+def test_get_without_forecast_fails_clearly(tmp_path):
+    missing_cache = str(tmp_path / "never_written.bin")
+    result = _rope(
+        "--cache-path", missing_cache, "get", "--mode", "interp",
+        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert "forecast" in result.stderr.lower()
+
+
 # ---------------------------------------------------------------------------
 # get — batch
 # ---------------------------------------------------------------------------
 
-def test_batch_get_from_csv(server, tmp_path):
+def test_batch_get_from_csv(forecast_cache, tmp_path):
     csv = tmp_path / "queries.csv"
     csv.write_text(
         "YYYY,MM,DD,HH,MIN,SS,lst,lat,alt_km\n"
@@ -156,7 +198,7 @@ def test_batch_get_from_csv(server, tmp_path):
         "2024,01,01,01,30,00,6.0,-30.0,300.0\n"
     )
     out = tmp_path / "results.json"
-    result = server.run(
+    result = forecast_cache.run(
         "get", "--mode", "interp",
         "--file", str(csv), "--output", str(out),
         timeout=15,
@@ -170,72 +212,81 @@ def test_batch_get_from_csv(server, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Idle timeout — separate short-lived server
+# Discard-on-reforecast invariant
 # ---------------------------------------------------------------------------
 
-def test_idle_timeout_shuts_down_server(tmp_path):
-    # AF_UNIX path limits: 104 chars on macOS, 108 on Linux, 108 on Windows.
-    # pytest embeds the full test name in tmp_path, which can exceed these
-    # limits (e.g. 132 chars on macOS CI). Use tempfile.gettempdir() directly
-    # so the path stays short (~25–70 chars) on all platforms.
-    import tempfile
-    sock = str(Path(tempfile.gettempdir()) / f"rope_idle_{os.getpid()}.sock")
-    conf = tmp_path / "rope_idle.conf"
-    _write_conf(conf, idle_timeout_seconds=5)
+def test_second_forecast_discards_first(tmp_path):
+    """A new `rope forecast` fully replaces the cache file -- there is no
+    server holding old state around, so a query valid only under the first
+    forecast's window must fail once a second, differently-shaped forecast
+    has been written to the same cache path.
+    """
+    cache = str(tmp_path / "forecast_grid.bin")
+    conf  = tmp_path / "rope.conf"
+    _write_conf(conf)
 
-    start = _rope(
-        "--socket", sock, "forecast",
+    # horizon=3 -> window covers 2024-01-01T00:00:00 .. 03:00:00
+    first = _rope(
+        "--cache-path", cache, "forecast",
+        "--start", FORECAST_START, "--horizon", "3", "--config", str(conf),
+    )
+    assert first.returncode == 0
+
+    late_time = "2024-01-01T03:00:00"
+    probe_a = _rope(
+        "--cache-path", cache, "get", "--mode", "interp",
+        "--time", late_time, "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
+    )
+    assert probe_a.returncode == 0, "sanity check: first forecast's window must include late_time"
+
+    # horizon=1 -> window covers 2024-01-01T00:00:00 .. 01:00:00
+    second = _rope(
+        "--cache-path", cache, "forecast",
+        "--start", FORECAST_START, "--horizon", "1", "--config", str(conf),
+    )
+    assert second.returncode == 0
+
+    probe_b = _rope(
+        "--cache-path", cache, "get", "--mode", "interp",
+        "--time", late_time, "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
+        timeout=10,
+    )
+    assert probe_b.returncode != 0, "old (horizon=3) window must be gone after re-forecasting with horizon=1"
+
+
+# ---------------------------------------------------------------------------
+# Pipeline load failure — a failed forecast never touches an existing cache
+# ---------------------------------------------------------------------------
+
+def test_bad_exported_dir_forecast_fails_but_existing_cache_survives(tmp_path):
+    cache    = str(tmp_path / "forecast_grid.bin")
+    good_conf = tmp_path / "rope_good.conf"
+    _write_conf(good_conf)
+
+    first = _rope(
+        "--cache-path", cache, "forecast",
         "--start", FORECAST_START, "--horizon", str(FORECAST_HORIZON),
-        "--config", str(conf),
+        "--config", str(good_conf),
     )
-    assert start.returncode == 0, f"idle-timeout server startup failed:\n{start.stderr}"
+    assert first.returncode == 0, f"initial forecast failed:\n{first.stderr}"
 
-    # Wait long enough for the watcher to fire (timeout=5s, watcher checks every 1s,
-    # so 8 seconds gives two full check cycles of margin).
-    time.sleep(8)
-
-    probe = _rope(
-        "--socket", sock, "get", "--mode", "interp",
-        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
-        timeout=5,
-    )
-    assert probe.returncode != 0, "server should have shut down due to idle timeout"
-
-
-# ---------------------------------------------------------------------------
-# Pipeline load failure — server stays alive and serves other requests
-# ---------------------------------------------------------------------------
-
-def test_bad_exported_dir_forecast_fails_but_server_stays_alive(tmp_path):
-    # exported_dir has no model artifacts at all, so the pipeline fails to
-    # load at server startup. Per server.cpp, that failure is logged and
-    # swallowed — the server keeps running and answers other requests;
-    # only "forecast" should report an error.
-    #
-    # Socket path must stay short (AF_UNIX sun_path limit, 104 chars on
-    # macOS) — pytest's tmp_path embeds the full test name and can exceed
-    # that. Use tempfile.gettempdir() directly, same as the idle-timeout
-    # test above.
-    import tempfile
-    sock      = str(Path(tempfile.gettempdir()) / f"rope_baddir_{os.getpid()}.sock")
-    conf      = tmp_path / "rope_bad_dir.conf"
+    # Now point at a directory with no model artifacts at all -- the pipeline
+    # fails to load. That failure must not touch the cache file written above.
+    bad_conf  = tmp_path / "rope_bad.conf"
     empty_dir = tmp_path / "empty_models"
     empty_dir.mkdir()
-    conf.write_text(
-        f"[paths]\n"
-        f"exported_dir = {empty_dir}\n"
-        f"[server]\n"
-        f"idle_timeout_seconds = 30\n"
-    )
+    _write_conf(bad_conf, exported_dir=empty_dir)
 
-    forecast = _rope(
-        "--socket", sock, "forecast",
+    second = _rope(
+        "--cache-path", cache, "forecast",
         "--start", FORECAST_START, "--horizon", str(FORECAST_HORIZON),
-        "--config", str(conf),
+        "--config", str(bad_conf),
     )
-    assert forecast.returncode != 0
-    assert "pipeline" in forecast.stderr.lower()
+    assert second.returncode != 0
 
-    # The server itself must still be up — exit should succeed cleanly.
-    exit_result = _rope("--socket", sock, "exit", timeout=10)
-    assert exit_result.returncode == 0
+    # The cache file from the first, successful forecast must still be intact.
+    probe = _rope(
+        "--cache-path", cache, "get", "--mode", "interp",
+        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
+    )
+    assert probe.returncode == 0, "a failed forecast must not clobber the existing cache file"

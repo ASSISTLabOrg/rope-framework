@@ -54,14 +54,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # act doesn't inject Node.js into custom job containers (unlike GitHub's
-      # hosted runners), so JS actions like actions/cache fail without this.
-      - name: Install Node.js (act only)
-        if: ${{ env.ACT }}
-        run: |
-          apt-get update
-          apt-get install -y nodejs
-
       - name: Install build tools
         run: |
           apt-get update
@@ -69,7 +61,7 @@ jobs:
           pip3 install --quiet --break-system-packages "cmake>=4.2" pytest
 
       - name: Install .NET 8 SDK
-        if: ${{ inputs.run_dotnet_tests }}
+        if: ${{ inputs.run_dotnet_tests || inputs.dotnet_pack_smoke }}
         run: |
           wget -qO /tmp/dotnet-install.sh https://dot.net/v1/dotnet-install.sh
           bash /tmp/dotnet-install.sh --channel 8.0 --install-dir /usr/local/dotnet
@@ -103,34 +95,66 @@ jobs:
 
       - name: Test (Python)
         if: ${{ inputs.build_tests }}
-        run: pytest tests/python/ -v
-        env:
-          ROPE_EXE:         ${{ github.workspace }}/build/rope
-          ROPE_FIXTURE_DIR: ${{ github.workspace }}/tests/fixtures
+        run: |
+          export ROPE_LIB="$(pwd)/build/librope.so"
+          export ROPE_EXE="$(pwd)/build/rope"
+          export ROPE_FIXTURE_DIR="$(pwd)/tests/fixtures"
+          pytest tests/python/ -v
 
       - name: Test (C#)
         if: ${{ inputs.run_dotnet_tests }}
-        run: dotnet test tests/dotnet/RopeTests.csproj --logger "console;verbosity=normal"
+        run: |
+          export ROPE_LIB="$(pwd)/build/librope.so"
+          export ROPE_EXE="$(pwd)/build/rope"
+          export ROPE_FIXTURE_DIR="$(pwd)/tests/fixtures"
+          dotnet test tests/dotnet/RopeTests.csproj --logger "console;verbosity=normal"
         env:
           DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
-          ROPE_LIB:         ${{ github.workspace }}/build/librope.so
-          ROPE_EXE:         ${{ github.workspace }}/build/rope
-          ROPE_FIXTURE_DIR: ${{ github.workspace }}/tests/fixtures
 
-      # Smoke check: catches Rope.csproj/packaging regressions on every push.
-      # Bundles this job's Linux binaries via the default RopeNativeDir; the
-      # multi-platform release package is built separately in release.yml.
       - name: Pack (C#)
         if: ${{ inputs.dotnet_pack_smoke }}
-        run: dotnet pack dotnet/Rope.csproj -c Release -o nupkg
+        run: |
+          cmake --install build --prefix /tmp/pack-smoke-install
+          mkdir -p /tmp/pack-smoke-native
+          cp /tmp/pack-smoke-install/bin/rope /tmp/pack-smoke-native/rope.bin
+          cp /tmp/pack-smoke-install/lib/*.so* /tmp/pack-smoke-native/
+          dotnet pack dotnet/Rope.csproj -c Release -o nupkg \
+            -p:Version=0.0.0-packsmoke \
+            -p:RopeNativeDir=/tmp/pack-smoke-native
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+
+      - name: Pack smoke test (consume)
+        if: ${{ inputs.dotnet_pack_smoke }}
+        run: |
+          cat > /tmp/pack-smoke-rope.conf <<CONF
+          [paths]
+          exported_dir = $(pwd)/tests/fixtures/test_models
+          driver_path  = $(pwd)/tests/fixtures/test_models/sw_test.swbin
+          [server]
+          idle_timeout_seconds = 30
+          CONF
+
+          dotnet restore tests/dotnet/PackSmokeConsumer/PackSmokeConsumer.csproj \
+            -p:RopeSmokeTestVersion=0.0.0-packsmoke \
+            -p:RestoreAdditionalProjectSources="$(pwd)/nupkg"
+
+          dotnet build tests/dotnet/PackSmokeConsumer/PackSmokeConsumer.csproj -c Release --no-restore
+
+          for tfm in net48 net8.0; do
+            test -f "tests/dotnet/PackSmokeConsumer/bin/Release/$tfm/librope.so" || {
+              echo "::error::librope.so missing from $tfm build output — packaging regression"
+              exit 1
+            }
+          done
+
+          dotnet tests/dotnet/PackSmokeConsumer/bin/Release/net8.0/PackSmokeConsumer.dll /tmp/pack-smoke-rope.conf
         env:
           DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
 
       - name: Package
         run: cpack --config build/CPackConfig.cmake
 
-      # Save cache only on main — feature branches restore but never write,
-      # so total cache entries stay capped at one per variant.
       - name: Save deps cache
         if: always() && inputs.save_cache
         uses: actions/cache/save@v4

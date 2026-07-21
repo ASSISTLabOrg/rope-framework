@@ -9,49 +9,42 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- NuGet package metadata -->
     <PackageId>RopeFramework</PackageId>
     <Version>0.2.0</Version>
     <Authors>Violet Player</Authors>
     <Description>C# binding for the ROPE atmospheric density framework. Wraps librope via P/Invoke for in-process interpolation queries, and the rope CLI for forecast and server lifecycle management. Supports .NET Framework 4.8 and .NET 8.</Description>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
-    <ContentTargetFolders>contentFiles</ContentTargetFolders>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="../LICENSE" Pack="true" PackagePath="" />
   </ItemGroup>
 
-  <!--
-    Native binaries (rope.dll / rope.exe / librope.so / librope.dylib / rope) are
-    built by CMake, not by this project, so they aren't present during a plain
-    `dotnet build`. Point RopeNativeDir at a directory containing them (e.g. the
-    CMake install prefix's bin/ or build/ directory) to bundle whichever of them
-    are found into the package as contentFiles — NuGet copies these into the
-    consuming project's output directory automatically.
-
-      dotnet pack -p:RopeNativeDir=/path/to/install/bin
-
-    Building without RopeNativeDir set still produces a valid package containing
-    just the managed Rope.dll.
-  -->
   <PropertyGroup>
     <RopeNativeDir Condition="'$(RopeNativeDir)' == ''">$(MSBuildThisFileDirectory)../build</RopeNativeDir>
   </PropertyGroup>
 
   <ItemGroup>
-    <_RopeNativeFile Include="$(RopeNativeDir)/rope.dll"      Condition="Exists('$(RopeNativeDir)/rope.dll')" />
+    <_RopeNativeFile Include="$(RopeNativeDir)/librope.dll"   Condition="Exists('$(RopeNativeDir)/librope.dll')" />
     <_RopeNativeFile Include="$(RopeNativeDir)/rope.exe"      Condition="Exists('$(RopeNativeDir)/rope.exe')" />
     <_RopeNativeFile Include="$(RopeNativeDir)/librope.so"    Condition="Exists('$(RopeNativeDir)/librope.so')" />
     <_RopeNativeFile Include="$(RopeNativeDir)/librope.dylib" Condition="Exists('$(RopeNativeDir)/librope.dylib')" />
-    <_RopeNativeFile Include="$(RopeNativeDir)/rope"          Condition="Exists('$(RopeNativeDir)/rope')" />
+    <_RopeNativeFile Include="$(RopeNativeDir)/rope.bin"      Condition="Exists('$(RopeNativeDir)/rope.bin')" />
+    <_RopeNativeFile Include="$(RopeNativeDir)/rope-osx.bin"  Condition="Exists('$(RopeNativeDir)/rope-osx.bin')" />
+    <_RopeNativeFile Include="$(RopeNativeDir)/*.dll"
+                      Exclude="$(RopeNativeDir)/librope.dll;$(RopeNativeDir)/rope.exe" />
+    <_RopeNativeFile Include="$(RopeNativeDir)/*.so;$(RopeNativeDir)/*.so.*"
+                      Exclude="$(RopeNativeDir)/librope.so" />
+    <_RopeNativeFile Include="$(RopeNativeDir)/*.dylib"
+                      Exclude="$(RopeNativeDir)/librope.dylib" />
 
     <None Include="@(_RopeNativeFile)"
           Pack="true"
-          PackagePath="contentFiles/any/any/%(Filename)%(Extension)"
-          BuildAction="Content"
-          CopyToOutput="true"
+          PackagePath="build/native/%(Filename)%(Extension)"
           Visible="false" />
+
+    <None Include="RopeFramework.targets" Pack="true" PackagePath="build/net48/RopeFramework.targets" Visible="false" />
+    <None Include="RopeFramework.targets" Pack="true" PackagePath="build/net8.0/RopeFramework.targets" Visible="false" />
   </ItemGroup>
 
 </Project>

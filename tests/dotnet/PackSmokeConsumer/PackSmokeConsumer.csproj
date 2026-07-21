@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Not part of the regular xunit suite — a standalone exe used only by the
+    CI "Pack smoke test" steps. Lives in its own subdirectory so it isn't
+    swept into RopeTests.csproj's own compile items (see the Compile
+    Remove in RopeTests.csproj for why that matters).
+
+    Consumes the locally-packed RopeFramework nupkg exactly like a real
+    end user would: via PackageReference, with no libPath/exePath passed
+    to the Rope constructor. This is what catches packaging regressions
+    (native files not landing in the build output) that a ProjectReference
+    to dotnet/Rope.csproj never would, since that has no native binaries
+    to bundle at all.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net48;net8.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="RopeFramework" Version="$(RopeSmokeTestVersion)" />
+  </ItemGroup>
+</Project>

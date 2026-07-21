@@ -1,0 +1,27 @@
+<Project>
+  <Target Name="RopeFramework_CopyNativeFiles" AfterTargets="Build;Publish">
+    <!-- Exclude Rope.dll itself — this must never overwrite the consumer's own managed reference. -->
+    <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
+      <_RopeNativeFile Include="$(MSBuildThisFileDirectory)../native/*.dll"
+                        Exclude="$(MSBuildThisFileDirectory)../native/Rope.dll" />
+      <_RopeNativeFile Include="$(MSBuildThisFileDirectory)../native/*.exe" />
+    </ItemGroup>
+    <ItemGroup Condition="'$(OS)' != 'Windows_NT'">
+      <_RopeNativeFile Include="$(MSBuildThisFileDirectory)../native/*.so*" />
+      <_RopeNativeFile Include="$(MSBuildThisFileDirectory)../native/*.dylib" />
+      <_RopeNativeFile Include="$(MSBuildThisFileDirectory)../native/rope.bin"
+                        Condition="Exists('$(MSBuildThisFileDirectory)../native/rope.bin')" />
+      <_RopeNativeFile Include="$(MSBuildThisFileDirectory)../native/rope-osx.bin"
+                        Condition="Exists('$(MSBuildThisFileDirectory)../native/rope-osx.bin')" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(_RopeNativeFile)"
+          DestinationFolder="$(TargetDir)"
+          SkipUnchangedFiles="true"
+          Condition="'$(TargetDir)' != ''" />
+    <Copy SourceFiles="@(_RopeNativeFile)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true"
+          Condition="'$(PublishDir)' != ''" />
+  </Target>
+</Project>

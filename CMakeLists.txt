@@ -1,14 +1,7 @@
 cmake_minimum_required(VERSION 4.2)
-project(ROPE VERSION 0.2.0 LANGUAGES CXX C)
+project(ROPE VERSION 0.4.0 LANGUAGES CXX C)
 
-# Allow CI to inject the version from the git tag: -DROPE_RELEASE_VERSION=x.y.z
-# (Cannot use ROPE_VERSION — project() sets that to the hardcoded version above.)
-#
-# Strip before checking emptiness, and compare with STREQUAL rather than a
-# bare if(ROPE_RELEASE_VERSION): CMake's if() treats the literal string "0"
-# as false, so a bare check would silently skip validation (and any stray
-# whitespace from shell quoting would make an otherwise-empty value look
-# non-empty to that same bare check).
+# CI version override: -DROPE_RELEASE_VERSION=x.y.z (not ROPE_VERSION, which project() hardcodes).
 string(REGEX REPLACE "^v" "" ROPE_RELEASE_VERSION "${ROPE_RELEASE_VERSION}")
 string(STRIP "${ROPE_RELEASE_VERSION}" ROPE_RELEASE_VERSION)
 if(NOT ROPE_RELEASE_VERSION STREQUAL "")
@@ -44,6 +37,7 @@ endif()
 # ---------------------------------------------------------------------------
 option(ROPE_USE_LIBTORCH  "Build the TorchScript / LibTorch backend" ON)
 option(ROPE_BUILD_TESTS   "Build and register unit tests (CTest)"    OFF)
+option(ROPE_USE_ZARR      "Build 'rope forecast --zarr' export support (needs zlib)" ON)
 
 # ---------------------------------------------------------------------------
 # External dependencies (nlohmann/json, CLI11) via FetchContent
@@ -62,12 +56,18 @@ FetchContent_Declare(
     URL_HASH SHA256=f2d893a65c3b1324c50d4e682c0cdc021dd0477ae2c048544f39eed6654b699a
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
-FetchContent_MakeAvailable(nlohmann_json CLI11)
+FetchContent_Declare(
+    rope_registry
+    URL      https://github.com/AssistLabOrg/rope-registry/archive/refs/tags/v0.2.tar.gz
+    URL_HASH SHA256=c072969ee1dff2f01f5d40b54e03308b8e0debf7f9e3db1426651a37c6798ff1
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json CLI11 rope_registry)
+
+include(cmake/RopeHelpers.cmake)
 
 # ---------------------------------------------------------------------------
-# ONNX Runtime + LibTorch — acquired via cmake/Dependencies.cmake.
-# Set ROPE_DOWNLOAD_DEPS=ON to auto-fetch; or supply ONNXRUNTIME_ROOT /
-# ORT_INC / ORT_LIB / Torch_DIR manually.
+# ONNX Runtime + LibTorch (cmake/Dependencies.cmake; ROPE_DOWNLOAD_DEPS=ON to auto-fetch)
 # ---------------------------------------------------------------------------
 include(cmake/Dependencies.cmake)
 
@@ -100,6 +100,17 @@ endif()
 find_package(OpenMP)
 
 # ---------------------------------------------------------------------------
+# zlib — ForecastZarrWriter's chunk compressor (io/forecast_zarr_writer.cpp)
+# ---------------------------------------------------------------------------
+if(ROPE_USE_ZARR)
+    find_package(ZLIB QUIET)
+    if(NOT ZLIB_FOUND)
+        message(STATUS "zlib not found — ROPE_USE_ZARR requested but disabled")
+        set(ROPE_USE_ZARR OFF)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Compiler warnings and release optimisations
 # ---------------------------------------------------------------------------
 add_library(rope_compile_opts INTERFACE)
@@ -121,7 +132,7 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN YES)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ---------------------------------------------------------------------------
-# rope_core — platform layer (types, datetime, IpcSocket, spawn)
+# rope_core — platform layer (paths, memory-mapped files), datetime, version
 # ---------------------------------------------------------------------------
 add_library(rope_core STATIC)
 
@@ -140,9 +151,6 @@ target_include_directories(rope_core
 target_link_libraries(rope_core
     PUBLIC  rope_compile_opts
 )
-if(WIN32)
-    target_link_libraries(rope_core PUBLIC ws2_32)
-endif()
 
 # ---------------------------------------------------------------------------
 # rope_io — CSV parsing, config, stats, driver DB, IC table
@@ -152,16 +160,25 @@ add_library(rope_io STATIC
     src/io/config_reader.cpp
     src/io/driver_db.cpp
     src/io/driver_bin.cpp
-    src/io/driver_config.cpp
     src/io/driver_cache.cpp
     src/io/ic_table.cpp
     src/io/ic_bin.cpp
-    src/io/ic_config.cpp
+    src/io/model_manifest.cpp
+    src/io/forecast_grid_bin.cpp
+    src/io/mapped_forecast_grid.cpp
 )
 target_link_libraries(rope_io
     PUBLIC  rope_core
     PRIVATE nlohmann_json::nlohmann_json
 )
+if(ROPE_USE_ZARR)
+    target_sources(rope_io PRIVATE src/io/forecast_zarr_writer.cpp)
+    target_link_libraries(rope_io PRIVATE ZLIB::ZLIB)
+    target_compile_definitions(rope_io PUBLIC ROPE_HAS_ZARR)
+    message(STATUS "Zarr forecast export ('rope forecast --zarr'): enabled")
+else()
+    message(STATUS "Zarr forecast export ('rope forecast --zarr'): disabled")
+endif()
 
 # ---------------------------------------------------------------------------
 # rope_interpolate — in-memory grid interpolation
@@ -169,21 +186,7 @@ target_link_libraries(rope_io
 add_library(rope_interpolate STATIC
     src/interpolate/grid_interpolator.cpp
 )
-target_link_libraries(rope_interpolate PUBLIC rope_core)
-
-# ---------------------------------------------------------------------------
-# rope_client — IPC socket transport + typed request/response API
-# ---------------------------------------------------------------------------
-add_library(rope_client STATIC
-    src/client/client.cpp
-)
-target_include_directories(rope_client
-    PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/client>
-)
-target_link_libraries(rope_client
-    PUBLIC  rope_core
-    PRIVATE nlohmann_json::nlohmann_json
-)
+target_link_libraries(rope_interpolate PUBLIC rope_core rope_io)
 
 # ---------------------------------------------------------------------------
 # rope_forecast — full inference pipeline
@@ -191,6 +194,13 @@ target_link_libraries(rope_client
 if(ORT_INC AND ORT_LIB)
     add_library(rope_forecast STATIC
         src/forecast/pipeline.cpp
+        src/forecast/pipeline_registry.cpp
+        src/forecast/config_builder.cpp
+        src/forecast/backends/runtime_compat.cpp
+        src/forecast/backends/model_factory.cpp
+        src/forecast/backends/ic_source_factory.cpp
+        src/forecast/stacked_ensemble/stacked_ensemble_pipeline.cpp
+        src/forecast/stacked_ensemble/unscented_transform.cpp
     )
     target_include_directories(rope_forecast
         PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -217,34 +227,16 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# rope_server — request router, cache, and pipeline integration
-# ---------------------------------------------------------------------------
-add_library(rope_server STATIC
-    src/server/server.cpp
-)
-target_include_directories(rope_server
-    PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/server>
-)
-target_link_libraries(rope_server
-    PUBLIC  rope_core
-            rope_interpolate
-            rope_io
-    PRIVATE nlohmann_json::nlohmann_json
-)
-if(TARGET rope_forecast)
-    target_link_libraries(rope_server PRIVATE rope_forecast)
-    target_compile_definitions(rope_server PRIVATE ROPE_HAS_FORECAST)
-endif()
-
-# ---------------------------------------------------------------------------
 # rope (shared library) — C API
 # ---------------------------------------------------------------------------
 add_library(rope SHARED
     src/capi/rope.cpp
 )
+# Force "lib" prefix on all platforms (avoids Windows rope.dll colliding with the Rope.dll NuGet wrapper).
+set_target_properties(rope PROPERTIES PREFIX "lib")
 target_compile_definitions(rope PRIVATE ROPE_BUILDING_SHARED)
 target_link_libraries(rope
-    PRIVATE rope_client
+    PRIVATE rope_io
             rope_interpolate
             nlohmann_json::nlohmann_json
 )
@@ -263,64 +255,23 @@ add_executable(rope_exe
 )
 set_target_properties(rope_exe PROPERTIES OUTPUT_NAME rope)
 target_link_libraries(rope_exe
-    PRIVATE rope_client
-            rope_server
-            rope_io
+    PRIVATE rope_io
+            rope_interpolate
             CLI11::CLI11
             nlohmann_json::nlohmann_json
 )
 if(TARGET rope_forecast)
     target_link_libraries(rope_exe PRIVATE rope_forecast)
+    target_compile_definitions(rope_exe PRIVATE ROPE_HAS_FORECAST)
 endif()
+rope_set_runtime_rpath(rope_exe)
+# Supports both the tarball layout (bin/ + ../lib/) and the flat NuGet layout.
 if(APPLE)
-    set(_exe_install_rpath "@executable_path/../lib;@loader_path/../lib")
+    set(_exe_install_rpath "@executable_path;@executable_path/../lib;@loader_path;@loader_path/../lib")
 else()
-    set(_exe_install_rpath "$ORIGIN/../lib")
+    set(_exe_install_rpath "$ORIGIN;$ORIGIN/../lib")
 endif()
-get_filename_component(ORT_LIB_DIR "${ORT_LIB}" DIRECTORY)
-if(ORT_LIB_DIR)
-    set(_exe_build_rpath "${ORT_LIB_DIR}")
-    if(Torch_FOUND)
-        if(TORCH_INSTALL_PREFIX)
-            set(_exe_torch_lib_dir "${TORCH_INSTALL_PREFIX}/lib")
-        else()
-            list(GET TORCH_LIBRARIES 0 _exe_first_torch)
-            get_filename_component(_exe_torch_lib_dir "${_exe_first_torch}" DIRECTORY)
-        endif()
-        list(APPEND _exe_build_rpath "${_exe_torch_lib_dir}")
-    endif()
-    set_target_properties(rope_exe PROPERTIES
-        BUILD_RPATH  "${_exe_build_rpath}"
-        INSTALL_RPATH "${_exe_install_rpath}"
-    )
-
-    # On Windows there is no RPATH; copy ORT (and LibTorch) DLLs next to
-    # rope.exe so the server subprocess finds them when spawned by the CLI.
-    if(WIN32)
-        file(GLOB _exe_ort_dlls "${ORT_LIB_DIR}/*.dll")
-        foreach(_dll ${_exe_ort_dlls})
-            add_custom_command(TARGET rope_exe POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${_dll}" "$<TARGET_FILE_DIR:rope_exe>"
-                VERBATIM
-            )
-        endforeach()
-        if(Torch_FOUND AND DEFINED _exe_torch_lib_dir)
-            file(GLOB _exe_torch_dlls "${_exe_torch_lib_dir}/*.dll")
-            foreach(_dll ${_exe_torch_dlls})
-                add_custom_command(TARGET rope_exe POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                            "${_dll}" "$<TARGET_FILE_DIR:rope_exe>"
-                    VERBATIM
-                )
-            endforeach()
-        endif()
-    endif()
-else()
-    set_target_properties(rope_exe PROPERTIES
-        INSTALL_RPATH "${_exe_install_rpath}"
-    )
-endif()
+set_target_properties(rope_exe PROPERTIES INSTALL_RPATH "${_exe_install_rpath}")
 
 # ---------------------------------------------------------------------------
 # Install rules
@@ -391,19 +342,18 @@ if(Torch_FOUND)
 endif()
 
 # Model artifacts
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data/models/tiegcm-lstm-v1")
-    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/models/tiegcm-lstm-v1/" DESTINATION data/models/tiegcm-lstm-v1)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data/models/tiegcm-aurora-v1")
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/models/tiegcm-aurora-v1/" DESTINATION data/models/tiegcm-aurora-v1)
 endif()
 
 # Optional override — point -DROPE_MODELS_DIR= at a different exported dir
 set(ROPE_MODELS_DIR "" CACHE PATH
-    "Directory of exported model artifacts to bundle in the package (overrides data/models/tiegcm-lstm-v1)")
+    "Directory of exported model artifacts to bundle in the package (overrides data/models/tiegcm-aurora-v1)")
 if(ROPE_MODELS_DIR AND EXISTS "${ROPE_MODELS_DIR}")
-    install(DIRECTORY "${ROPE_MODELS_DIR}/" DESTINATION data/models/tiegcm-lstm-v1)
+    install(DIRECTORY "${ROPE_MODELS_DIR}/" DESTINATION data/models/tiegcm-aurora-v1)
 endif()
 
-# Space-weather binary (bundled historical data; used as driver_path override
-# while the online CelesTrak conversion stub is pending).
+# Space-weather binary (bundled historical data; driver_path override until CelesTrak conversion lands).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data/drivers/sw_celestrack_1957.swbin")
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/drivers/sw_celestrack_1957.swbin"
         DESTINATION data/drivers)
@@ -413,7 +363,9 @@ endif()
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/python/" DESTINATION python)
 
 # .NET binding
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/dotnet/" DESTINATION dotnet)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/dotnet/" DESTINATION dotnet
+    PATTERN "bin"    EXCLUDE
+    PATTERN "obj"    EXCLUDE)
 
 # Python demo
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/demo/pyproject.toml")

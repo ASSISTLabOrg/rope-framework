@@ -9,12 +9,12 @@ public class RopeExceptionTests
 
     [Theory]
     [InlineData(0, "ok")]
-    [InlineData(1, "no server")]
     [InlineData(2, "no forecast cached")]
     [InlineData(3, "time out of range")]
     [InlineData(4, "spatial point out of range")]
     [InlineData(5, "bad argument")]
     [InlineData(6, "internal error")]
+    [InlineData(7, "forecast cache corrupt")]
     public void Known_code_formats_as_name(int code, string name)
     {
         var ex = new RopeException(code, "detail");

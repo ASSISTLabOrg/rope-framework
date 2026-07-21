@@ -1,10 +1,5 @@
 #pragma once
-// Visibility macro for shared-library symbols.
-//
-// In shared-library targets, define ROPE_BUILDING_SHARED during compilation
-// of the library itself.  Consumers who link against the shared library
-// should define ROPE_SHARED.  For static-library or header-only usage,
-// neither is needed and ROPE_API expands to nothing.
+// Visibility macro for shared-library symbols. Define ROPE_BUILDING_SHARED when building the shared lib, ROPE_SHARED when linking against it; neither needed for static/header-only use.
 
 #if defined(_WIN32)
 #  if defined(ROPE_BUILDING_SHARED)

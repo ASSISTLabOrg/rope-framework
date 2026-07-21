@@ -1,11 +1,13 @@
 /*
  * IntegrationTests.cs — end-to-end C# binding tests.
  *
- * Mirrors tests/python/test_cli.py: runs a real forecast via the rope CLI,
- * then exercises the librope P/Invoke path for single and batch queries.
+ * Mirrors tests/python/test_cli.py: runs a real forecast via the rope CLI
+ * (which writes a forecast-grid cache file), then exercises the librope
+ * P/Invoke path for single and batch queries against that cache file. No
+ * server process, no sockets.
  *
  * Required environment variables (injected by CI; skipped when absent):
- *   ROPE_LIB          path to librope.so / librope.dylib / rope.dll
+ *   ROPE_LIB          path to librope.so / librope.dylib / librope.dll
  *   ROPE_EXE          path to the rope CLI binary
  *   ROPE_FIXTURE_DIR  path to tests/fixtures/
  *
@@ -23,11 +25,12 @@ using Xunit;
 
 namespace RopeFramework.Tests;
 
-// ── Shared server fixture ─────────────────────────────────────────────────────
-// One server is spun up for the entire collection; all integration tests share
-// it via ICollectionFixture<ServerFixture>.
+// ── Shared forecast-cache fixture ───────────────────────────────────────────
+// One forecast is run for the entire collection; all integration tests share
+// the resulting cache file via ICollectionFixture<ForecastFixture>. No
+// teardown process to stop -- just delete the temp directory.
 
-public sealed class ServerFixture : IDisposable
+public sealed class ForecastFixture : IDisposable
 {
     // Matches sw_test.swbin coverage: 2023-12-31T22 → 2024-01-01T03 (6 rows).
     // Horizon=3, seq_len=3 requires (S-1)+(H+1) = 6 rows.
@@ -38,17 +41,17 @@ public sealed class ServerFixture : IDisposable
     public static readonly DateTime QueryTime =
         new(2024, 1, 1, 1, 0, 0, DateTimeKind.Utc);
 
-    public string LibPath    { get; }
-    public string ExePath    { get; }
-    public string SocketPath { get; }
-    public string ConfPath   { get; }
+    public string LibPath   { get; }
+    public string ExePath   { get; }
+    public string CachePath { get; }
+    public string ConfPath  { get; }
 
     // False when env vars are absent — all integration tests skip gracefully.
     public bool Available { get; }
 
     private readonly string? _tmpDir;
 
-    public ServerFixture()
+    public ForecastFixture()
     {
         LibPath = Environment.GetEnvironmentVariable("ROPE_LIB")         ?? "";
         ExePath = Environment.GetEnvironmentVariable("ROPE_EXE")         ?? "";
@@ -58,7 +61,7 @@ public sealed class ServerFixture : IDisposable
             string.IsNullOrEmpty(ExePath)     ||
             string.IsNullOrEmpty(fixtureDir))
         {
-            SocketPath = ConfPath = "";
+            CachePath = ConfPath = "";
             Available = false;
             return;
         }
@@ -67,8 +70,8 @@ public sealed class ServerFixture : IDisposable
                                $"rope_cs_{Path.GetRandomFileName()}");
         Directory.CreateDirectory(_tmpDir);
 
-        SocketPath = Path.Combine(_tmpDir, "rope.sock");
-        ConfPath   = Path.Combine(_tmpDir, "rope.conf");
+        CachePath = Path.Combine(_tmpDir, "forecast_grid.bin");
+        ConfPath  = Path.Combine(_tmpDir, "rope.conf");
 
         string testModels = Path.Combine(fixtureDir, "test_models");
         string swBin      = Path.Combine(testModels,  "sw_test.swbin");
@@ -76,13 +79,11 @@ public sealed class ServerFixture : IDisposable
         File.WriteAllText(ConfPath,
             $"[paths]{Environment.NewLine}" +
             $"exported_dir = {testModels}{Environment.NewLine}" +
-            $"driver_path  = {swBin}{Environment.NewLine}" +
-            $"[server]{Environment.NewLine}" +
-            $"idle_timeout_seconds = 60{Environment.NewLine}");
+            $"driver_path  = {swBin}{Environment.NewLine}");
 
-        // Spawn the server by running `rope forecast`; a non-zero exit means
-        // the pipeline failed to load — mark fixture unavailable.
-        int rc = RunCli(ExePath, SocketPath, ConfPath,
+        // Run the forecast; a non-zero exit means the pipeline failed to
+        // load — mark fixture unavailable.
+        int rc = RunCli(ExePath, CachePath, ConfPath,
             "forecast",
             "--start",   ForecastStart,
             "--horizon", ForecastHorizon.ToString());
@@ -91,16 +92,14 @@ public sealed class ServerFixture : IDisposable
 
     public void Dispose()
     {
-        if (!Available || string.IsNullOrEmpty(ExePath)) return;
-        RunCli(ExePath, SocketPath, ConfPath, "exit");
         if (_tmpDir is not null)
             try { Directory.Delete(_tmpDir, recursive: true); } catch { }
     }
 
-    private static int RunCli(string exe, string sock, string conf,
-                               params string[] args)
+    public static int RunCli(string exe, string cachePath, string conf,
+                              params string[] args)
     {
-        var joined = $"--socket \"{sock}\" {string.Join(" ", args)} --config \"{conf}\"";
+        var joined = $"--cache-path \"{cachePath}\" {string.Join(" ", args)} --config \"{conf}\"";
         var psi = new ProcessStartInfo(exe, joined)
         {
             RedirectStandardOutput = true,
@@ -114,16 +113,16 @@ public sealed class ServerFixture : IDisposable
 }
 
 [CollectionDefinition("Integration")]
-public class IntegrationCollection : ICollectionFixture<ServerFixture> { }
+public class IntegrationCollection : ICollectionFixture<ForecastFixture> { }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 [Collection("Integration")]
 public class IntegrationTests
 {
-    private readonly ServerFixture _srv;
+    private readonly ForecastFixture _srv;
 
-    public IntegrationTests(ServerFixture srv) => _srv = srv;
+    public IntegrationTests(ForecastFixture srv) => _srv = srv;
 
     // ── Forecast ─────────────────────────────────────────────────────────────
 
@@ -134,10 +133,10 @@ public class IntegrationTests
 
         using var rope = new Rope(
             libPath: _srv.LibPath, exePath: _srv.ExePath,
-            socketPath: _srv.SocketPath, configPath: _srv.ConfPath);
+            cachePath: _srv.CachePath, configPath: _srv.ConfPath);
 
-        var result = rope.Forecast(ServerFixture.ForecastStart,
-                                   ServerFixture.ForecastHorizon);
+        var result = rope.Forecast(ForecastFixture.ForecastStart,
+                                   ForecastFixture.ForecastHorizon);
 
         Assert.False(string.IsNullOrEmpty(result.WindowStart));
         Assert.False(string.IsNullOrEmpty(result.WindowEnd));
@@ -152,10 +151,10 @@ public class IntegrationTests
 
         using var rope = new Rope(
             libPath: _srv.LibPath, exePath: _srv.ExePath,
-            socketPath: _srv.SocketPath);
+            cachePath: _srv.CachePath);
 
         rope.Open();
-        var r = rope.Get(ServerFixture.QueryTime,
+        var r = rope.Get(ForecastFixture.QueryTime,
                          lst: 12.0, lat: 45.0, altKm: 400.0,
                          mode: Rope.Interp);
 
@@ -170,10 +169,10 @@ public class IntegrationTests
 
         using var rope = new Rope(
             libPath: _srv.LibPath, exePath: _srv.ExePath,
-            socketPath: _srv.SocketPath);
+            cachePath: _srv.CachePath);
 
         rope.Open();
-        var r = rope.Get(ServerFixture.QueryTime,
+        var r = rope.Get(ForecastFixture.QueryTime,
                          lst: 12.0, lat: 45.0, altKm: 400.0,
                          mode: Rope.Hold);
 
@@ -189,10 +188,10 @@ public class IntegrationTests
 
         using var rope = new Rope(
             libPath: _srv.LibPath, exePath: _srv.ExePath,
-            socketPath: _srv.SocketPath);
+            cachePath: _srv.CachePath);
 
         // Do NOT call rope.Open() — Get should call EnsureOpen() itself.
-        var r = rope.Get(ServerFixture.QueryTime,
+        var r = rope.Get(ForecastFixture.QueryTime,
                          lst: 0.0, lat: 0.0, altKm: 300.0);
         Assert.True(r.Density > 0);
     }
@@ -204,7 +203,7 @@ public class IntegrationTests
 
         using var rope = new Rope(
             libPath: _srv.LibPath, exePath: _srv.ExePath,
-            socketPath: _srv.SocketPath);
+            cachePath: _srv.CachePath);
 
         rope.Open();
         var future = new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -212,6 +211,23 @@ public class IntegrationTests
         var ex = Assert.Throws<RopeException>(
             () => rope.Get(future, lst: 12.0, lat: 45.0, altKm: 400.0));
         Assert.Equal(3, ex.Code);  // time out of range
+    }
+
+    [Fact]
+    public void Get_without_forecast_throws_RopeException()
+    {
+        if (!_srv.Available) return;
+
+        string missingCache = Path.Combine(
+            Path.GetTempPath(), $"rope_cs_missing_{Path.GetRandomFileName()}.bin");
+
+        using var rope = new Rope(
+            libPath: _srv.LibPath, exePath: _srv.ExePath,
+            cachePath: missingCache);
+
+        var ex = Assert.Throws<RopeException>(
+            () => rope.Get(ForecastFixture.QueryTime, lst: 12.0, lat: 45.0, altKm: 400.0));
+        Assert.Equal(2, ex.Code);  // no forecast cached
     }
 
     // ── Batch query ──────────────────────────────────────────────────────────
@@ -223,14 +239,14 @@ public class IntegrationTests
 
         using var rope = new Rope(
             libPath: _srv.LibPath, exePath: _srv.ExePath,
-            socketPath: _srv.SocketPath);
+            cachePath: _srv.CachePath);
 
         rope.Open();
 
         var times = new[]
         {
-            ServerFixture.QueryTime,
-            ServerFixture.QueryTime.AddHours(1),
+            ForecastFixture.QueryTime,
+            ForecastFixture.QueryTime.AddHours(1),
         };
         var results = rope.GetBatch(
             times,
@@ -253,7 +269,7 @@ public class IntegrationTests
 
         using var rope = new Rope(
             libPath: _srv.LibPath, exePath: _srv.ExePath,
-            socketPath: _srv.SocketPath);
+            cachePath: _srv.CachePath);
 
         rope.Open();
 
@@ -275,12 +291,12 @@ public class IntegrationTests
 
         using var rope = new Rope(
             libPath: _srv.LibPath, exePath: _srv.ExePath,
-            socketPath: _srv.SocketPath, configPath: _srv.ConfPath);
+            cachePath: _srv.CachePath, configPath: _srv.ConfPath);
 
-        rope.Forecast(ServerFixture.ForecastStart, ServerFixture.ForecastHorizon);
+        rope.Forecast(ForecastFixture.ForecastStart, ForecastFixture.ForecastHorizon);
         rope.Refresh();
 
-        var r = rope.Get(ServerFixture.QueryTime,
+        var r = rope.Get(ForecastFixture.QueryTime,
                          lst: 12.0, lat: 45.0, altKm: 400.0);
         Assert.True(r.Density > 0);
     }
@@ -292,10 +308,56 @@ public class IntegrationTests
 
         var rope = new Rope(
             libPath: _srv.LibPath, exePath: _srv.ExePath,
-            socketPath: _srv.SocketPath);
+            cachePath: _srv.CachePath);
 
         rope.Open();
         rope.Dispose();
         rope.Dispose();  // second Dispose must not throw
+    }
+
+    // ── Discard-on-reforecast invariant ─────────────────────────────────────
+
+    [Fact]
+    public void Second_forecast_discards_first()
+    {
+        // A new forecast fully replaces the cache file -- there is no server
+        // holding old state around, so a query valid only under the first
+        // forecast's window must fail once a second, differently-shaped
+        // forecast has been written to the same cache path.
+        if (!_srv.Available) return;
+
+        string tmpDir = Path.Combine(Path.GetTempPath(), $"rope_cs_discard_{Path.GetRandomFileName()}");
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            string cache = Path.Combine(tmpDir, "forecast_grid.bin");
+
+            // horizon=3 -> window covers 2024-01-01T01:00:00 .. 03:00:00
+            int rc1 = ForecastFixture.RunCli(_srv.ExePath, cache, _srv.ConfPath,
+                "forecast", "--start", ForecastFixture.ForecastStart, "--horizon", "3");
+            Assert.Equal(0, rc1);
+
+            var lateTime = new DateTime(2024, 1, 1, 3, 0, 0, DateTimeKind.Utc);
+            using (var ropeA = new Rope(libPath: _srv.LibPath, exePath: _srv.ExePath, cachePath: cache))
+            {
+                var r = ropeA.Get(lateTime, lst: 12.0, lat: 45.0, altKm: 400.0);
+                Assert.True(r.Density > 0, "sanity check: first forecast's window must include lateTime");
+            }
+
+            // horizon=1 -> window covers only 2024-01-01T01:00:00
+            int rc2 = ForecastFixture.RunCli(_srv.ExePath, cache, _srv.ConfPath,
+                "forecast", "--start", ForecastFixture.ForecastStart, "--horizon", "1");
+            Assert.Equal(0, rc2);
+
+            using (var ropeB = new Rope(libPath: _srv.LibPath, exePath: _srv.ExePath, cachePath: cache))
+            {
+                Assert.Throws<RopeException>(
+                    () => ropeB.Get(lateTime, lst: 12.0, lat: 45.0, altKm: 400.0));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(tmpDir, recursive: true); } catch { }
+        }
     }
 }

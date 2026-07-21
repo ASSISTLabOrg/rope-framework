@@ -2,20 +2,84 @@ name: Build
 
 on:
   push:
-    branches: ["**"]
-  pull_request:
+    branches:
+      - "**"
+      - "!main"
   workflow_dispatch:
     inputs:
       test_all_platforms:
-        description: "Run tests on all platforms (not just Linux cpu)"
+        description: "Force the full build/test suite on all platforms, regardless of branch"
         type: boolean
         default: false
 
 jobs:
+  plan:
+    name: Determine which platforms to build
+    runs-on: ubuntu-latest
+    outputs:
+      linux_cpu:      ${{ steps.decide.outputs.linux_cpu }}
+      linux_cuda12:   ${{ steps.decide.outputs.linux_cuda12 }}
+      macos:          ${{ steps.decide.outputs.macos }}
+      windows_cpu:    ${{ steps.decide.outputs.windows_cpu }}
+      windows_cuda12: ${{ steps.decide.outputs.windows_cuda12 }}
+    steps:
+      - name: Decide
+        id: decide
+        run: |
+          REF="${{ github.ref_name }}"
+          FORCE_ALL="${{ inputs.test_all_platforms }}"
+
+          linux_cpu=false
+          linux_cuda12=false
+          macos=false
+          windows_cpu=false
+          windows_cuda12=false
+
+          if [ "$FORCE_ALL" = "true" ]; then
+            linux_cpu=true; linux_cuda12=true; macos=true; windows_cpu=true; windows_cuda12=true
+          elif [ "$REF" = "develop" ]; then
+            linux_cpu=true; linux_cuda12=true; macos=true; windows_cpu=true; windows_cuda12=true
+          elif [[ "$REF" == feature/* ]]; then
+            linux_cpu=true
+          elif [[ "$REF" == bugfix/* ]]; then
+            rest="${REF#bugfix/}"
+            platform="${rest%%/*}"
+            name="${rest#*/}"
+            if [ -z "$platform" ] || [ -z "$name" ] || [ "$name" = "$rest" ]; then
+              echo "::error::Branch '$REF' doesn't match bugfix/<platform>/<name> — missing platform or name segment"
+              exit 1
+            fi
+            case "$platform" in
+              linux)
+                linux_cpu=true; linux_cuda12=true
+                ;;
+              windows)
+                windows_cpu=true; windows_cuda12=true
+                ;;
+              macos)
+                macos=true
+                ;;
+              all-platforms)
+                linux_cpu=true; linux_cuda12=true; macos=true; windows_cpu=true; windows_cuda12=true
+                ;;
+              *)
+                echo "::error::Unknown platform '$platform' in branch '$REF' — expected bugfix/{linux,windows,macos,all-platforms}/<name>"
+                exit 1
+                ;;
+            esac
+          fi
+
+          echo "linux_cpu=$linux_cpu"           >> "$GITHUB_OUTPUT"
+          echo "linux_cuda12=$linux_cuda12"     >> "$GITHUB_OUTPUT"
+          echo "macos=$macos"                   >> "$GITHUB_OUTPUT"
+          echo "windows_cpu=$windows_cpu"       >> "$GITHUB_OUTPUT"
+          echo "windows_cuda12=$windows_cuda12" >> "$GITHUB_OUTPUT"
+
   # ── Linux CPU ─────────────────────────────────────────────────────────────
-  # Runs on every push/PR — this is the primary CI gate.
   build-linux:
     name: Linux (x86_64, cpu)
+    needs: plan
+    if: needs.plan.outputs.linux_cpu == 'true'
     uses: ./.github/workflows/_build-linux.yml
     with:
       hardware: cpu
@@ -23,76 +87,123 @@ jobs:
       build_tests: true
       run_dotnet_tests: true
       dotnet_pack_smoke: true
-      save_cache: ${{ github.ref == 'refs/heads/main' }}
+      save_cache: ${{ github.ref == 'refs/heads/develop' }}
       package_suffix: linux-x86_64-cpu
       artifact_name: rope-linux-x86_64-cpu
       cache_key: deps-linux-x64-cpu-ort1.25.0-torch2.7.0
 
   # ── Linux CUDA 12 ─────────────────────────────────────────────────────────
-  # Compilation-only check for the CUDA variant; skipped on feature branches.
   build-linux-cuda12:
     name: Linux (x86_64, cuda12)
-    if: >-
-      github.ref == 'refs/heads/main' ||
-      github.event_name == 'workflow_dispatch'
+    needs: plan
+    if: needs.plan.outputs.linux_cuda12 == 'true'
     uses: ./.github/workflows/_build-linux.yml
     with:
       hardware: cuda12
       use_libtorch: false
-      build_tests: ${{ inputs.test_all_platforms == true }}
+      build_tests: true
       run_dotnet_tests: false
-      save_cache: ${{ github.ref == 'refs/heads/main' }}
+      save_cache: ${{ github.ref == 'refs/heads/develop' }}
       package_suffix: linux-x86_64-cuda12
       artifact_name: rope-linux-x86_64-cuda12
       cache_key: deps-linux-x64-cuda12-ort1.25.0
 
   # ── macOS arm64 ───────────────────────────────────────────────────────────
-  # Skipped on feature branches to avoid accumulating macOS cache copies.
   build-macos-arm64:
     name: macOS (arm64, cpu)
-    if: >-
-      github.ref == 'refs/heads/main' ||
-      github.event_name == 'workflow_dispatch'
+    needs: plan
+    if: needs.plan.outputs.macos == 'true'
     uses: ./.github/workflows/_build-macos.yml
     with:
       hardware: cpu
       use_libtorch: true
-      build_tests: ${{ inputs.test_all_platforms == true }}
-      run_dotnet_tests: false
-      save_cache: ${{ github.ref == 'refs/heads/main' }}
+      build_tests: true
+      run_dotnet_tests: true
+      dotnet_pack_smoke: true
+      save_cache: ${{ github.ref == 'refs/heads/develop' }}
       package_suffix: macos-arm64-cpu
       artifact_name: rope-macos-arm64-cpu
       cache_key: deps-macos-arm64-cpu-ort1.25.0-torch2.7.0
 
   # ── Windows CUDA 12 ───────────────────────────────────────────────────────
-  # Skipped on feature branches.
   build-windows-cuda12:
     name: Windows (x64, cuda12)
-    if: >-
-      github.ref == 'refs/heads/main' ||
-      github.event_name == 'workflow_dispatch'
+    needs: plan
+    if: needs.plan.outputs.windows_cuda12 == 'true'
     uses: ./.github/workflows/_build-windows.yml
     with:
       hardware: cuda12
       use_libtorch: false
-      build_tests: ${{ inputs.test_all_platforms == true }}
+      build_tests: true
       run_dotnet_tests: false
-      save_cache: ${{ github.ref == 'refs/heads/main' }}
+      save_cache: ${{ github.ref == 'refs/heads/develop' }}
       package_suffix: windows-x64-cuda12
       artifact_name: rope-windows-x64-cuda12
       cache_key: deps-windows-x64-cuda12-ort1.25.0
 
   # ── Windows CPU ───────────────────────────────────────────────────────────
-  # Runs on every push/PR — full test suite, same as Linux CPU.
   build-windows:
     name: Windows (x64, cpu)
+    needs: plan
+    if: needs.plan.outputs.windows_cpu == 'true'
     uses: ./.github/workflows/_build-windows.yml
     with:
       hardware: cpu
       use_libtorch: true
       build_tests: true
       run_dotnet_tests: true
-      save_cache: ${{ github.ref == 'refs/heads/main' }}
+      dotnet_pack_smoke: true
+      save_cache: ${{ github.ref == 'refs/heads/develop' }}
       package_suffix: windows-x64-cpu
       artifact_name: rope-windows-x64-cpu
       cache_key: deps-windows-x64-cpu-ort1.25.0-torch2.7.0
+
+  # ── Pack .NET (dev artifact, develop only) ──────────────────────────────────
+  pack-dotnet:
+    name: Pack .NET (NuGet, dev)
+    needs: [build-linux, build-macos-arm64, build-windows]
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: rope-linux-x86_64-cpu
+          path: artifacts/linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: rope-windows-x64-cpu
+          path: artifacts/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: rope-macos-arm64-cpu
+          path: artifacts/macos
+
+      - name: Extract native binaries
+        run: |
+          mkdir -p native
+          tar -xzf artifacts/linux/rope_framework-*.tar.gz -C artifacts/linux
+          unzip -q artifacts/windows/rope_framework-*.zip -d artifacts/windows
+          tar -xzf artifacts/macos/rope_framework-*.tar.gz -C artifacts/macos
+          find artifacts/linux   -path '*/lib/*.so*'           -exec cp {} native/ \;
+          find artifacts/macos   -path '*/lib/*.dylib'         -exec cp {} native/ \;
+          find artifacts/linux   -path '*/bin/rope'            -exec cp {} native/rope.bin \;
+          find artifacts/macos   -path '*/bin/rope'            -exec cp {} native/rope-osx.bin \;
+          find artifacts/windows -path '*/bin/*' \( -iname '*.dll' -o -iname '*.exe' \) -exec cp {} native/ \;
+          ls native/
+
+      - name: Pack
+        run: |
+          dotnet pack dotnet/Rope.csproj -c Release -o nupkg \
+            -p:RopeNativeDir="${{ github.workspace }}/native" \
+            -p:Version=0.0.0-dev.${{ github.run_number }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rope-dotnet-nupkg
+          path: nupkg/*.nupkg
+          retention-days: 1

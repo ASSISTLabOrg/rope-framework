@@ -1,16 +1,13 @@
 name: Cleanup
 
-# Purge GitHub Actions caches for branches that no longer exist.
-# Runs every 24 hours and can also be triggered manually.
-
 on:
   schedule:
-    - cron: '0 */24 * * *'
+    - cron: '0 4 * * 6'
   workflow_dispatch:
 
 permissions:
-  actions: write   # list and delete caches
-  contents: read   # list branches (required when explicit permissions are set)
+  actions: write
+  contents: read
 
 jobs:
   purge-stale-caches:

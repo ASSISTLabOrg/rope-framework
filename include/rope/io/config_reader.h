@@ -1,11 +1,5 @@
 #pragma once
-// INI-style configuration file reader.
-//
-// Format:
-//   [section]       # section header
-//   key = value     # leading/trailing whitespace stripped; # starts a comment
-//
-// Keys are accessed as "section.key".
+// INI-style config file reader ([section] / key = value, # comments); keys accessed as "section.key".
 
 #include <filesystem>
 #include <map>

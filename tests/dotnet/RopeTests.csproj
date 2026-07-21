@@ -20,4 +20,16 @@
   <ItemGroup>
     <ProjectReference Include="../../dotnet/Rope.csproj" />
   </ItemGroup>
+
+  <!--
+    PackSmokeConsumer is a separate, standalone exe project (CI pack/consume
+    smoke test, not part of this xunit suite) that happens to live in a
+    subdirectory here for tidiness. SDK-style default globbing is recursive
+    (**/*.cs), so without this exclude its Program.cs would also get
+    compiled into RopeTests itself, colliding with this project's own
+    entry point.
+  -->
+  <ItemGroup>
+    <Compile Remove="PackSmokeConsumer/**/*.cs" />
+  </ItemGroup>
 </Project>

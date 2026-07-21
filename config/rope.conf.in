@@ -7,14 +7,10 @@
 [paths]
 # ---------------------------------------------------------------------------
 
-# Directory produced by export_models.py (contains *.onnx, *.bin,
-# driver_config.json, ic_config.json, ic_table.icbin).
-exported_dir = ../data/models/tiegcm-lstm-v1
+# Model directory
+exported_dir = ../data/models/tiegcm-aurora-v1
 
-# Explicit driver data file (.swbin or .csv).  When set, bypasses the
-# cache manager entirely — no network access or staleness check.
-# Remove this line (or leave empty) once the online conversion is
-# implemented and the cache manager can supply fresh data automatically.
+# Explicit driver data file (.swbin or .csv). Comment out to use automated driver caching.
 driver_path = ../data/drivers/sw_celestrack_1957.swbin
 
 
@@ -22,13 +18,13 @@ driver_path = ../data/drivers/sw_celestrack_1957.swbin
 [driver_cache]
 # ---------------------------------------------------------------------------
 
-# Directory where DriverCacheManager writes refreshed .swbin files.
+# Directory where DriverCacheManager writes refreshed .swbin files
 # Defaults to the platform cache root when omitted:
 #   Linux/macOS : $XDG_CACHE_HOME/rope/drivers  (or ~/.cache/rope/drivers)
 #   Windows     : %LOCALAPPDATA%\rope\drivers
 # cache_dir = ~/.cache/rope/drivers
 
-# Maximum age of a cached file before a refresh is attempted (hours).
+# Maximum age of a cached file before a refresh is attempted (hours)
 max_age_hours = 24
 
 
@@ -36,48 +32,41 @@ max_age_hours = 24
 [threads]
 # ---------------------------------------------------------------------------
 
-# ORT intra-op threads for the 15 base models.
-# 1 is typically best here because OpenMP already parallelises across models.
+# ORT intra-op threads for forecast models
+# 1 is typically best here because OpenMP already parallelises
 intra_threads_base = 1
 
-# ORT intra-op threads for the meta model (batched Transformer inference over
-# T timesteps; benefits from multi-threading).
-# Set to 0 to use hardware_concurrency() automatically.
+# ORT intra-op threads for the meta model
+# Set to 0 to use hardware_concurrency() automatically
 intra_threads_meta = 0
 
-# ORT intra-op threads for the COAE decoder (conv-heavy, benefits from all
-# available cores).  Set to 0 to use hardware_concurrency() automatically.
-# Ignored when [decoder] device != cpu (GPU execution uses its own thread pool).
+# ORT intra-op threads for the COAE decoder
+# Set to 0 to use hardware_concurrency() automatically
+# Ignored when [decoder] device != cpu
 intra_threads_decoder = 0
 
 
 # ---------------------------------------------------------------------------
 [decoder]
 # ---------------------------------------------------------------------------
-# Only used when the binary was compiled with ROPE_USE_LIBTORCH=ON.
-# When using the ONNX Runtime backend (ROPE_USE_LIBTORCH=OFF), this section
-# is ignored and the [threads] settings above apply instead.
-#
-# device = cpu       Run decoder on CPU via LibTorch (default).
-# device = cuda      Run decoder on the first available GPU.
-# device = cuda:0    Explicit GPU index.
+# Only used when the binary was compiled with ROPE_USE_LIBTORCH=ON
+# device = cpu       Run decoder on CPU via LibTorch (default)
+# device = cuda      Run decoder on the first available GPU
+# device = cuda:0    Explicit GPU index
 device = @ROPE_DECODER_DEVICE@
-
-
-# ---------------------------------------------------------------------------
-[server]
-# ---------------------------------------------------------------------------
-
-# Shut down automatically after this many seconds with no requests received.
-# Set to 0 to disable the idle timeout.
-idle_timeout_seconds = 1800
 
 
 # ---------------------------------------------------------------------------
 [forecast]
 # ---------------------------------------------------------------------------
 
-# Set to false to skip the Unscented Transform uncertainty calculation.
-# The decoder runs once on the meta-model mean latents; uncertainty is set
-# to 0.  Substantially faster when uncertainty estimates are not needed.
+# Set to false to skip the uncertainty calculation
 compute_uncertainty = true
+
+# Bounds peak memory during decode
+# <= 0 = whole horizon
+decode_chunk_hours = 72
+
+# Caps decoder batch size; lowers peak memory at the cost of more decoder calls
+# <= 0 = use the model's own value
+decode_batch_size = 0

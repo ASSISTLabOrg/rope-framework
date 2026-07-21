@@ -22,6 +22,9 @@ public:
     // ".icbin" → binary; anything else → CSV.
     static ICTable from_file(const std::filesystem::path& path);
 
+    // Probe dir for ic_table.icbin then ic_table.csv; throws if neither exists.
+    static ICTable load_from_dir(const std::filesystem::path& dir);
+
     explicit ICTable(const std::filesystem::path& csv_path);
 
     // Returns latent_dim() coefficients for (f10, kp).

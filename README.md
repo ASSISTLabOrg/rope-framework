@@ -17,7 +17,7 @@ Contact [Violet Player](mailto:violet.player@noaa.gov) or [Piyush Mehta](mailto:
 
 ## Installation
 
-Download the release archive for your platform and hardware from [Google Drive](https://drive.google.com/drive/folders/1gVQ0gqzwfKDaZIuT8tWoCyWQOL_hT4Ol?usp=drive_link)
+Download the release archive for your platform and hardware from the [GitHub Releases page](https://github.com/ASSISTLabOrg/rope-framework/releases).
 
 | Platform | File |
 |----------|------|
@@ -36,8 +36,7 @@ rope_framework-<version>-<platform>/
     bin/        rope executable
     lib/        runtime libraries
     config/     rope.conf
-    models/     (download separately)
-    data/       (download separately)
+    data/       models/ and drivers/ (download separately)
     include/    C API header (rope.h)
 ```
 
@@ -47,7 +46,7 @@ rope_framework-<version>-<platform>/
 xattr -r -d com.apple.quarantine rope_framework-<version>-macos-arm64-cpu/
 ```
 
-**Download models and data separately.** The `models/` and `data/` directories are not included in the release archive. Download them from [Google Drive](https://drive.google.com/drive/folders/1gVQ0gqzwfKDaZIuT8tWoCyWQOL_hT4Ol?usp=drive_link) and place them inside the extracted folder alongside `bin/` and `lib/`.
+**Download models and data separately.** The `data/` directory (model artifacts and driver data) is not included in the release archive. Download it from [Google Drive](https://drive.google.com/drive/folders/1gVQ0gqzwfKDaZIuT8tWoCyWQOL_hT4Ol?usp=drive_link) and place it inside the extracted folder alongside `bin/` and `lib/`.
 
 Once in place the directory structure should look like the layout above.
 
@@ -76,7 +75,7 @@ All commands are run through the `rope` executable in `bin/`. On Linux and macOS
 rope forecast --start "2024-06-01 00:00:00" --horizon 24
 ```
 
-This runs a 24-hour forecast starting at the given UTC time and caches the result in memory. A background server process is started automatically on first use and remains running until you exit it.
+Runs a 24-hour forecast starting at the given UTC time and writes the resulting grid to a cache file. A second `rope forecast` fully replaces the cached grid.
 
 `--start` accepts `YYYY-MM-DD HH:MM:SS` or `YYYY-MM-DDTHH:MM:SS` in UTC.
 
@@ -113,17 +112,19 @@ To query many points at once, prepare a CSV file with the columns `YYYY,MM,DD,HH
 rope get --mode interp --file queries.csv --output results.csv
 ```
 
-### Stop the server
-
-```
-rope exit
-```
-
 ### Use a non-default config
 
 ```
 rope forecast --config /path/to/rope.conf --start "2024-06-01 00:00:00" --horizon 24
 ```
+
+### Export as Zarr
+
+```
+rope forecast --start "2024-06-01 00:00:00" --horizon 24 --zarr /path/to/output_dir
+```
+
+`--zarr` names a container directory; the store lands at `<path>/forecast_<start>_H<horizon>/`. Read it with `xarray.open_dataset(path, engine="zarr")`.
 
 ## Python
 
@@ -145,7 +146,7 @@ r = Rope(
 
 The constructor parameters are all optional. When omitted, `rope.py` resolves them relative to the directory one level above its own location (the archive root).
 
-To override the decoder device (e.g. to switch between CPU and GPU) without editing `rope.conf`, pass `device="cuda"`. The wrapper writes a temporary config with that setting and passes it to the server subprocess.
+To override the decoder device (e.g. to switch between CPU and GPU) without editing `rope.conf`, pass `device="cuda"`. The wrapper writes a temporary config with that setting and passes it to the forecast subprocess.
 
 ### Example
 
@@ -154,7 +155,7 @@ from rope import Rope, ROPE_INTERP, ROPE_HOLD
 
 r = Rope()
 
-# 1. Run a forecast (starts the server automatically).
+# 1. Run a forecast (writes the cache file).
 result = r.forecast("2024-06-01 00:00:00", horizon=24)
 print(result["window_start"], "→", result["window_end"])
 
@@ -181,11 +182,11 @@ with r:
     for t in my_timestamps:
         rho = r.get_density(t, lst=0.0, lat=0.0, alt_km=400.0)
 
-# 5. Stop the server when done.
+# 5. Release the handle when done (unmaps the cache file).
 r.shutdown()
 ```
 
-The `with` block calls `open()` on entry and `close()` on exit. It does not stop the server. If you never call `shutdown()`, the wrapper calls it automatically on interpreter exit via `atexit`, and the server will also stop itself after 30 minutes of inactivity (configurable via `idle_timeout_seconds` in `rope.conf`; set to `0` to disable).
+The `with` block calls `open()` on entry and `close()` on exit. `shutdown()` is an alias for `close()`, also called automatically on interpreter exit.
 
 ### Time formats
 
@@ -199,15 +200,15 @@ The `with` block calls `open()` on entry and `close()` on exit. It does not stop
 
 | Member | Description |
 |--------|-------------|
-| `Rope(lib_path, exe_path, socket_path, config_path, device)` | Constructor — all parameters optional |
+| `Rope(lib_path, exe_path, cache_path, config_path, device)` | Constructor — all parameters optional |
 | `forecast(start, horizon)` → `dict` | Run a forecast; returns `{"status", "window_start", "window_end"}` |
-| `open()` | Fetch the cached grid and open an interpolation handle |
-| `close()` | Release the handle without stopping the server |
-| `refresh()` | Re-fetch the grid after a new forecast |
+| `open()` | Memory-map the cached grid and open an interpolation handle |
+| `close()` | Release the handle (unmaps the cache file) |
+| `refresh()` | Re-map the cache file after a new forecast |
 | `get(time, lst, lat, alt_km, mode)` → `dict` | Single-point query; returns `{"density", "uncertainty"}` in kg/m³ |
 | `get_density(time, lst, lat, alt_km, mode)` → `float` | Single-point density only; faster for tight loops |
 | `get_batch(times, lsts, lats, alts_km, mode)` → `list[dict]` | N-point query; returns list of `{"density", "uncertainty"}` |
-| `shutdown()` | Send exit command to the server |
+| `shutdown()` | Alias for `close()` |
 | `device` | Property: active decoder device string |
 
 **Mode constants:** `ROPE_INTERP` (1, default) — interpolate in time; `ROPE_HOLD` (0) — snap to next model hour.
@@ -216,15 +217,16 @@ Errors are raised as `RopeError(RuntimeError)` with a `.code` attribute matching
 
 ## C API
 
-For use from C or languages with a C FFI, `include/rope/capi/rope.h` exposes a stable C-compatible ABI. The shared library is `lib/librope.so` (Linux), `lib/librope.dylib` (macOS), or `bin/rope.dll` (Windows).
+For use from C or languages with a C FFI, `include/rope/capi/rope.h` exposes a stable C-compatible ABI. The shared library is `lib/librope.so` (Linux), `lib/librope.dylib` (macOS), or `bin/librope.dll` (Windows).
 
-The C API handles interpolation only. The server lifecycle (starting a forecast, shutting down) is managed through the `rope` CLI as described above.
+The C API handles interpolation only — it memory-maps the cache file written by `rope forecast`. Run forecasts through the `rope` CLI.
 
 ### Functions
 
 ```c
-/* Open a handle. Returns NULL on failure; err_buf is filled with the reason. */
-rope_interp_t* rope_open(const char* sock_path, char* err_buf, int err_len);
+/* Open a handle onto the forecast-grid cache file (memory-mapped).
+ * Returns NULL on failure; err_buf is filled with the reason. */
+rope_interp_t* rope_open(const char* cache_path, char* err_buf, int err_len);
 
 /* Query a single point. Returns ROPE_OK (0) on success. */
 int rope_query(rope_interp_t* interp, int mode,
@@ -239,11 +241,8 @@ int rope_query_batch(rope_interp_t* interp, int mode, int n,
                      double* density, double* uncertainty,
                      char* err_buf, int err_len);
 
-/* Release the handle. Does not stop the server. Safe to call with NULL. */
+/* Release the handle (unmaps the cache file). Safe to call with NULL. */
 void rope_close(rope_interp_t* interp);
-
-/* Ask the server to shut down. */
-int rope_server_stop(const char* sock_path, char* err_buf, int err_len);
 ```
 
 **Mode constants:** `ROPE_HOLD` (0) — snap to nearest model hour; `ROPE_INTERP` (1) — interpolate in time.
@@ -253,12 +252,12 @@ int rope_server_stop(const char* sock_path, char* err_buf, int err_len);
 | Code | Value | Meaning |
 |------|-------|---------|
 | `ROPE_OK` | 0 | Success |
-| `ROPE_ERR_NO_SERVER` | 1 | Could not connect to server socket |
-| `ROPE_ERR_NO_FORECAST` | 2 | Server has no cached forecast |
+| `ROPE_ERR_NO_FORECAST` | 2 | No forecast cached at this path — run `rope forecast` first |
 | `ROPE_ERR_TIME_RANGE` | 3 | Query time outside forecast window |
 | `ROPE_ERR_SPATIAL_RANGE` | 4 | Query point outside grid bounds |
 | `ROPE_ERR_BAD_ARG` | 5 | Invalid argument (NULL pointer, etc.) |
 | `ROPE_ERR_INTERNAL` | 6 | Unexpected internal failure |
+| `ROPE_ERR_CACHE_CORRUPT` | 7 | Cache file exists but is corrupt or from an incompatible build |
 
 ### Example
 
@@ -306,21 +305,29 @@ cl /I include example.c /link /LIBPATH:bin rope.lib /out:example.exe
 
 ## C# (.NET)
 
-A C# binding is included in the `dotnet/` directory. It targets .NET 8 and works on all supported platforms. Copy `dotnet/Rope.cs` and `dotnet/Rope.csproj` into your project, or reference the project directly.
+A C# binding is included in the `dotnet/` directory and published as the `RopeFramework` NuGet package. It targets .NET Framework 4.8 and .NET 8, and works on all supported platforms.
 
-The binding uses P/Invoke to call `librope` for fast in-process interpolation, and `Process.Start` to invoke the `rope` CLI for forecast and server lifecycle management.
+Interpolation queries call `librope` in-process; forecasts run via the `rope` CLI as a subprocess.
 
 ### Setup
 
-Add the project reference to your `.csproj`:
+`RopeFramework` isn't on nuget.org — install the downloaded `.nupkg` as a local package source instead; this is the expected way to consume the binding.
+
+Download `RopeFramework.<version>.nupkg` from the GitHub Releases page, then either add it via the NuGet Package Manager (Visual Studio: Tools → NuGet Package Manager → Package Sources → add the folder, then install `RopeFramework` as usual) or from the CLI (works for both PackageReference and packages.config projects):
+
+```
+dotnet add package RopeFramework --source /path/to/folder
+```
+
+Either way, native binaries are bundled in the package and copied next to your build output automatically — no extra setup needed.
+
+Alternatively, reference the project directly or copy `Rope.cs` into your project:
 
 ```xml
 <ItemGroup>
   <ProjectReference Include="path/to/dotnet/Rope.csproj" />
 </ItemGroup>
 ```
-
-Or copy `Rope.cs` into your project and ensure `AllowUnsafeBlocks` is set:
 
 ```xml
 <PropertyGroup>
@@ -341,7 +348,7 @@ var r = new Rope(
     configPath: "config/rope.conf"
 );
 
-// Run a forecast (starts the server automatically on first call).
+// Run a forecast (writes the cache file).
 var forecast = r.Forecast("2024-06-01 00:00:00", horizon: 24);
 Console.WriteLine($"Window: {forecast.WindowStart} → {forecast.WindowEnd}");
 
@@ -364,26 +371,25 @@ var results = r.GetBatch(times,
     lats:   [45.0, -30.0],
     altsKm: [400.0, 300.0]);
 
-// Dispose closes the interpolation handle. Call Shutdown() to stop the server.
+// Dispose closes the interpolation handle (unmaps the cache file).
 r.Dispose();
-r.Shutdown();
 ```
 
 ### API summary
 
 | Member | Description |
 |--------|-------------|
-| `Rope(libPath, exePath, socketPath, configPath)` | Constructor — all parameters optional; defaults derived from package layout |
+| `Rope(libPath, exePath, cachePath, configPath)` | Constructor — all parameters optional; defaults derived from package layout |
 | `Forecast(string start, int horizon)` | Run a forecast; returns `ForecastResult` with `WindowStart` / `WindowEnd` |
 | `Forecast(DateTime start, int horizon)` | DateTime overload |
-| `Open()` | Fetch the cached grid and open an interpolation handle |
-| `Close()` | Release the handle without stopping the server |
-| `Refresh()` | Re-fetch the grid after a new forecast |
+| `Open()` | Memory-map the cached grid and open an interpolation handle |
+| `Close()` | Release the handle (unmaps the cache file) |
+| `Refresh()` | Re-map the cache file after a new forecast |
 | `Get(double timeUnix, ...)` | Single-point query; returns `QueryResult` with `Density` and `Uncertainty` |
 | `Get(DateTime time, ...)` | DateTime overload |
 | `GetBatch(double[] timesUnix, ...)` | Batch query; returns `QueryResult[]` |
 | `GetBatch(DateTime[] times, ...)` | DateTime overload |
-| `Shutdown()` | Send the exit command to the server |
+| `Shutdown()` | Alias for `Close()` |
 | `Dispose()` | Close the handle and unload the library |
 
 `Rope` implements `IDisposable`. Use a `using` block or call `Dispose()` explicitly. `Rope.Interp` (1) and `Rope.Hold` (0) are the mode constants.
@@ -410,8 +416,8 @@ Then open the notebook:
 bash demo/run_benchmark.sh
 ```
 
-The notebook uses `demo/rope.conf`, which is pre-configured to point at the `models/` and `data/` directories in the standard archive layout. If you extracted the archive somewhere else, edit the paths in that file before running.
+The notebook uses `demo/rope.conf`, which is pre-configured to point at the `data/` directory in the standard archive layout. If you extracted the archive somewhere else, edit the paths in that file before running.
 
 ## License
 
-MIT. See `LICENSE`.
+Mozilla Public License 2.0. See `LICENSE`.

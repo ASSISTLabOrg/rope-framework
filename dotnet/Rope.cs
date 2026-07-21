@@ -1,14 +1,10 @@
 /*
  * Rope.cs — C# binding for the ROPE framework.
  *
- * Wraps librope via P/Invoke for fast in-process interpolation queries, and
- * the rope CLI subprocess for forecast and server lifecycle management.
- *
- * Targets both .NET Framework 4.8 and .NET 8 from a single source file —
- * avoids System.Runtime.InteropServices.NativeLibrary and System.Text.Json,
- * neither of which exist on .NET Framework, in favor of a small P/Invoke
- * loader and minimal JSON field extraction.
- *
+ * Wraps librope via P/Invoke for fast in-process interpolation queries
+ * against a memory-mapped forecast-grid cache file, and the rope CLI
+ * subprocess to run forecasts (which write that cache file).
+ * 
  * Typical usage
  * -------------
  *     using RopeFramework;
@@ -39,14 +35,20 @@ namespace RopeFramework
     {
         public int Code { get; }
 
-        private static readonly string[] s_names = new string[]
+        private static readonly System.Collections.Generic.Dictionary<int, string> s_names =
+            new System.Collections.Generic.Dictionary<int, string>
         {
-            "ok", "no server", "no forecast cached", "time out of range",
-            "spatial point out of range", "bad argument", "internal error",
+            { 0, "ok" },
+            { 2, "no forecast cached" },
+            { 3, "time out of range" },
+            { 4, "spatial point out of range" },
+            { 5, "bad argument" },
+            { 6, "internal error" },
+            { 7, "forecast cache corrupt" },
         };
 
         public RopeException(int code, string message)
-            : base("[" + (code >= 0 && code < s_names.Length ? s_names[code] : code.ToString()) + "] " + message)
+            : base("[" + (s_names.TryGetValue(code, out var name) ? name : code.ToString()) + "] " + message)
         {
             Code = code;
         }
@@ -107,9 +109,6 @@ namespace RopeFramework
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void RopeCloseFn(IntPtr interp);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate int RopeServerStopFn(byte* sockPath, byte* errBuf, int errLen);
-
         // -------------------------------------------------------------------------
         // Fields
         // -------------------------------------------------------------------------
@@ -119,9 +118,8 @@ namespace RopeFramework
         private readonly RopeQueryFn       _ropeQuery;
         private readonly RopeQueryBatchFn  _ropeQueryBatch;
         private readonly RopeCloseFn       _ropeClose;
-        private readonly RopeServerStopFn  _ropeServerStop;  // may be null
 
-        private readonly string _socketPath;
+        private readonly string _cachePath;
         private readonly string _exePath;
         private readonly string _configPath;
         private IntPtr _handle;
@@ -132,7 +130,7 @@ namespace RopeFramework
         // -------------------------------------------------------------------------
 
         /// <param name="libPath">
-        ///   Path to librope.so / librope.dylib / rope.dll.
+        ///   Path to librope.so / librope.dylib / librope.dll.
         ///   Defaults to a file alongside Rope.dll, then lib/librope.* relative
         ///   to the package root.
         /// </param>
@@ -141,8 +139,8 @@ namespace RopeFramework
         ///   Defaults to a file alongside Rope.dll, then bin/rope relative to
         ///   the package root.
         /// </param>
-        /// <param name="socketPath">
-        ///   Unix domain socket path. Null → platform default.
+        /// <param name="cachePath">
+        ///   Forecast-grid cache file path. Null → platform default.
         /// </param>
         /// <param name="configPath">
         ///   Path to rope.conf. Defaults to config/rope.conf in the package root.
@@ -150,7 +148,7 @@ namespace RopeFramework
         public Rope(
             string libPath    = null,
             string exePath    = null,
-            string socketPath = null,
+            string cachePath  = null,
             string configPath = null)
         {
             string asmDir = Path.GetDirectoryName(typeof(Rope).Assembly.Location) ?? ".";
@@ -164,23 +162,14 @@ namespace RopeFramework
             _ropeQuery      = Load<RopeQueryFn>("rope_query");
             _ropeQueryBatch = Load<RopeQueryBatchFn>("rope_query_batch");
             _ropeClose      = Load<RopeCloseFn>("rope_close");
-            _ropeServerStop = TryLoad<RopeServerStopFn>("rope_server_stop");
 
-            _socketPath = socketPath;
+            _cachePath  = cachePath;
             _exePath    = exePath;
             _configPath = configPath;
         }
 
         private T Load<T>(string symbol) where T : class =>
             Marshal.GetDelegateForFunctionPointer<T>(NativeLib.GetExport(_lib, symbol));
-
-        private T TryLoad<T>(string symbol) where T : class
-        {
-            IntPtr ptr;
-            if (NativeLib.TryGetExport(_lib, symbol, out ptr))
-                return Marshal.GetDelegateForFunctionPointer<T>(ptr);
-            return null;
-        }
 
         // -------------------------------------------------------------------------
         // IDisposable
@@ -198,18 +187,18 @@ namespace RopeFramework
         // Handle lifecycle
         // -------------------------------------------------------------------------
 
-        /// <summary>Fetch the cached grid from the server and open an interpolation handle.</summary>
+        /// <summary>Memory-map the cached forecast grid and open an interpolation handle.</summary>
         public void Open()
         {
             if (_handle != IntPtr.Zero) return;
             byte* err = stackalloc byte[ErrBufLen];
 
             IntPtr handle;
-            if (_socketPath != null)
+            if (_cachePath != null)
             {
-                byte[] sock = Encoding.UTF8.GetBytes(_socketPath + '\0');
-                fixed (byte* sockPtr = sock)
-                    handle = _ropeOpen(sockPtr, err, ErrBufLen);
+                byte[] cache = Encoding.UTF8.GetBytes(_cachePath + '\0');
+                fixed (byte* cachePtr = cache)
+                    handle = _ropeOpen(cachePtr, err, ErrBufLen);
             }
             else
             {
@@ -217,11 +206,11 @@ namespace RopeFramework
             }
 
             if (handle == IntPtr.Zero)
-                throw new RopeException(1, ReadErr(err));
+                throw new RopeException(2, ReadErr(err));
             _handle = handle;
         }
 
-        /// <summary>Release the interpolation handle. Does not affect the server.</summary>
+        /// <summary>Release the interpolation handle (unmaps the cache file).</summary>
         public void Close()
         {
             if (_handle == IntPtr.Zero) return;
@@ -229,42 +218,31 @@ namespace RopeFramework
             _handle = IntPtr.Zero;
         }
 
-        /// <summary>Re-fetch the grid from the server (picks up a new forecast).</summary>
+        /// <summary>Re-map the current cache file (picks up a forecast written since Open()).</summary>
         public void Refresh()
         {
             Close();
             Open();
         }
 
-        /// <summary>Send the exit command to the server, stopping it.</summary>
+        /// <summary>Alias for Close(). There is no background process to stop --
+        /// kept as a method for source compatibility with existing code.</summary>
         public void Shutdown()
         {
-            if (_ropeServerStop == null) return;
-            byte* err = stackalloc byte[ErrBufLen];
-
-            if (_socketPath != null)
-            {
-                byte[] sock = Encoding.UTF8.GetBytes(_socketPath + '\0');
-                fixed (byte* sockPtr = sock)
-                    _ropeServerStop(sockPtr, err, ErrBufLen);
-            }
-            else
-            {
-                _ropeServerStop(null, err, ErrBufLen);
-            }
+            Close();
         }
 
         // -------------------------------------------------------------------------
-        // Server commands (via CLI subprocess)
+        // Forecast (via CLI subprocess)
         // -------------------------------------------------------------------------
 
-        /// <summary>Ask the server to run a forecast and cache the resulting grid.</summary>
+        /// <summary>Run a forecast and atomically write the resulting grid to the cache file.</summary>
         /// <param name="start">Forecast start time (UTC).</param>
         /// <param name="horizon">Forecast duration in hours.</param>
         public ForecastResult Forecast(DateTime start, int horizon) =>
             Forecast(start.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss"), horizon);
 
-        /// <summary>Ask the server to run a forecast and cache the resulting grid.</summary>
+        /// <summary>Run a forecast and atomically write the resulting grid to the cache file.</summary>
         /// <param name="start">ISO 8601 forecast start time string (UTC).</param>
         /// <param name="horizon">Forecast duration in hours.</param>
         public ForecastResult Forecast(string start, int horizon)
@@ -273,7 +251,15 @@ namespace RopeFramework
                 throw new InvalidOperationException(
                     "rope executable not found; pass exePath explicitly or check your package layout");
 
-            var sb = new StringBuilder("forecast --start \"");
+            // --cache-path is a global option and must precede the subcommand name.
+            var sb = new StringBuilder();
+            if (_cachePath != null)
+            {
+                sb.Append("--cache-path \"");
+                sb.Append(_cachePath);
+                sb.Append("\" ");
+            }
+            sb.Append("forecast --start \"");
             sb.Append(start);
             sb.Append("\" --horizon ");
             sb.Append(horizon);
@@ -420,17 +406,14 @@ namespace RopeFramework
             return (dt.ToUniversalTime() - epoch).TotalSeconds;
         }
 
-        // Resolves the native library, checking next to Rope.dll first (the
-        // layout produced by the NuGet contentFiles package), then falling
-        // back to the bin/lib layout of the zip/tarball release package.
         private static string ResolveLibPath(string root, string asmDir)
         {
             string[] candidates;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 candidates = new string[]
                 {
-                    Path.Combine(asmDir, "rope.dll"),
-                    Path.Combine(root,   "bin", "rope.dll"),
+                    Path.Combine(asmDir, "librope.dll"),
+                    Path.Combine(root,   "bin", "librope.dll"),
                 };
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 candidates = new string[]
@@ -453,8 +436,6 @@ namespace RopeFramework
                 "librope not found; pass libPath explicitly or check your package layout");
         }
 
-        // Resolves the rope CLI executable using the same search order as
-        // ResolveLibPath.
         private static string ResolveExePath(string root, string asmDir)
         {
             string[] candidates;
@@ -464,10 +445,19 @@ namespace RopeFramework
                     Path.Combine(asmDir, "rope.exe"),
                     Path.Combine(root,   "bin", "rope.exe"),
                 };
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                candidates = new string[]
+                {
+                    Path.Combine(asmDir, "rope"),
+                    Path.Combine(asmDir, "rope-osx.bin"),
+                    Path.Combine(root,   "bin",   "rope"),
+                    Path.Combine(root,   "build", "rope"),
+                };
             else
                 candidates = new string[]
                 {
                     Path.Combine(asmDir, "rope"),
+                    Path.Combine(asmDir, "rope.bin"),
                     Path.Combine(root,   "bin",   "rope"),
                     Path.Combine(root,   "build", "rope"),
                 };
@@ -478,8 +468,6 @@ namespace RopeFramework
             return null;
         }
 
-        // Extracts a string value from flat JSON without taking a System.Text.Json
-        // or Newtonsoft dependency. The forecast response only has two string fields.
         private static string ExtractJsonString(string json, string key)
         {
             string search = "\"" + key + "\"";
@@ -495,11 +483,6 @@ namespace RopeFramework
         }
     }
 
-    // -------------------------------------------------------------------------
-    // NativeLib — replaces System.Runtime.InteropServices.NativeLibrary,
-    // which is .NET Core 3.0+ only and absent from .NET Framework 4.8.
-    // -------------------------------------------------------------------------
-
     internal static class NativeLib
     {
         // Windows
@@ -512,17 +495,38 @@ namespace RopeFramework
         [DllImport("kernel32")]
         private static extern bool FreeLibrary(IntPtr hModule);
 
-        // Unix (Linux and macOS both expose dl* via libdl)
+        // Unix
         [DllImport("libdl", EntryPoint = "dlopen")]
-        private static extern IntPtr dlopen(string path, int flags);
-
+        private static extern IntPtr dlopen_libdl(string path, int flags);
         [DllImport("libdl", EntryPoint = "dlsym")]
-        private static extern IntPtr dlsym(IntPtr handle, string symbol);
-
+        private static extern IntPtr dlsym_libdl(IntPtr handle, string symbol);
         [DllImport("libdl", EntryPoint = "dlclose")]
-        private static extern int dlclose(IntPtr handle);
+        private static extern int dlclose_libdl(IntPtr handle);
+
+        [DllImport("libdl.so.2", EntryPoint = "dlopen")]
+        private static extern IntPtr dlopen_libdl2(string path, int flags);
+        [DllImport("libdl.so.2", EntryPoint = "dlsym")]
+        private static extern IntPtr dlsym_libdl2(IntPtr handle, string symbol);
+        [DllImport("libdl.so.2", EntryPoint = "dlclose")]
+        private static extern int dlclose_libdl2(IntPtr handle);
+
+        [DllImport("libc", EntryPoint = "dlopen")]
+        private static extern IntPtr dlopen_libc(string path, int flags);
+        [DllImport("libc", EntryPoint = "dlsym")]
+        private static extern IntPtr dlsym_libc(IntPtr handle, string symbol);
+        [DllImport("libc", EntryPoint = "dlclose")]
+        private static extern int dlclose_libc(IntPtr handle);
 
         private const int RTLD_NOW = 2;
+
+        private static readonly (Func<string, int, IntPtr> Open, Func<IntPtr, string, IntPtr> Sym, Func<IntPtr, int> Close)[] s_dlCandidates =
+        {
+            (dlopen_libdl,  dlsym_libdl,  dlclose_libdl),
+            (dlopen_libdl2, dlsym_libdl2, dlclose_libdl2),
+            (dlopen_libc,   dlsym_libc,   dlclose_libc),
+        };
+
+        private static int s_dlIndex = -1;
 
         public static IntPtr Load(string path)
         {
@@ -534,31 +538,42 @@ namespace RopeFramework
                         "Failed to load '" + path + "': error " + Marshal.GetLastWin32Error());
                 return h;
             }
-            else
+
+            if (s_dlIndex >= 0)
             {
-                IntPtr h = dlopen(path, RTLD_NOW);
+                IntPtr h = s_dlCandidates[s_dlIndex].Open(path, RTLD_NOW);
                 if (h == IntPtr.Zero)
                     throw new DllNotFoundException("Failed to load '" + path + "'");
                 return h;
             }
+
+            for (int i = 0; i < s_dlCandidates.Length; i++)
+            {
+                IntPtr h;
+                try
+                {
+                    h = s_dlCandidates[i].Open(path, RTLD_NOW);
+                }
+                catch (DllNotFoundException)
+                {
+                    continue;
+                }
+                s_dlIndex = i;
+                if (h == IntPtr.Zero)
+                    throw new DllNotFoundException("Failed to load '" + path + "'");
+                return h;
+            }
+            throw new DllNotFoundException("dlopen unavailable via libdl, libdl.so.2, or libc");
         }
 
         public static IntPtr GetExport(IntPtr lib, string symbol)
         {
             IntPtr ptr = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
                 ? GetProcAddress(lib, symbol)
-                : dlsym(lib, symbol);
+                : s_dlCandidates[s_dlIndex].Sym(lib, symbol);
             if (ptr == IntPtr.Zero)
                 throw new EntryPointNotFoundException("Symbol '" + symbol + "' not found");
             return ptr;
-        }
-
-        public static bool TryGetExport(IntPtr lib, string symbol, out IntPtr ptr)
-        {
-            ptr = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-                ? GetProcAddress(lib, symbol)
-                : dlsym(lib, symbol);
-            return ptr != IntPtr.Zero;
         }
 
         public static void Free(IntPtr lib)
@@ -566,7 +581,7 @@ namespace RopeFramework
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 FreeLibrary(lib);
             else
-                dlclose(lib);
+                s_dlCandidates[s_dlIndex].Close(lib);
         }
     }
 }
