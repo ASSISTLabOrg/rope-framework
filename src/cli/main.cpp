@@ -38,6 +38,7 @@
 #include <CLI/CLI.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -210,15 +211,22 @@ int main(int argc, char** argv) {
             const int total_steps = fc_horizon + 1;
 
             {
-                const int n_sig = 2 * pipeline->latent_dim() + 1;
+                // Grid-stitch buffers only; excludes decoder forward-pass memory (dominant, architecture-dependent, not derivable here).
+                const int n_sig = fcfg.compute_uncertainty
+                    ? 2 * pipeline->latent_dim() + 1 : 1;
                 const long long voxels = pipeline->grid_shape().voxels();
-                const int effective_chunk_hours =
-                    fcfg.decode_chunk_hours > 0 ? fcfg.decode_chunk_hours : total_steps;
-                const double est_mb = static_cast<double>(effective_chunk_hours) *
-                                      n_sig * voxels * 4 * 2 / (1024.0 * 1024.0);
+                const int effective_chunk_hours = std::min(
+                    fcfg.decode_chunk_hours > 0 ? fcfg.decode_chunk_hours : total_steps,
+                    total_steps);
+                const long long floats_per_chunk = fcfg.compute_uncertainty
+                    ? static_cast<long long>(effective_chunk_hours) * voxels * (n_sig + 2)
+                    : static_cast<long long>(effective_chunk_hours) * voxels * 2;
+                const double est_mb =
+                    static_cast<double>(floats_per_chunk) * 4 / (1024.0 * 1024.0);
                 std::cerr << "rope forecast: decode_chunk_hours=" << fcfg.decode_chunk_hours
                           << " (effective=" << effective_chunk_hours << ")"
-                          << "  estimated peak decode memory ~" << est_mb << " MB\n";
+                          << "  estimated grid-buffer memory ~" << est_mb << " MB"
+                          << " (excludes decoder network working memory)\n";
             }
 
             auto writer = rope::io::ForecastGridBinWriter::open(

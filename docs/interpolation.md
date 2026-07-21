@@ -33,7 +33,7 @@ giving `shape.voxels() = 72 × 36 × 45 = 116,640` for that particular model —
 idx(t, lst, lat, alt) = t * shape.voxels() + lst * (shape.n_lat*shape.n_alt) + lat * shape.n_alt + alt
 ```
 
-**Times** cover `[start+1h, start+H]` — the H genuine predictions. The initial condition at `start+0h` is internal to the pipeline and not included in the grid.
+**Times** cover `[start+0h, start+horizon]` inclusive — `H = horizon+1` rows, including the initial condition at hour 0.
 
 ---
 

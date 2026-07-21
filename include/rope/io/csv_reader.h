@@ -1,8 +1,5 @@
 #pragma once
-// Lightweight column-oriented CSV reader.
-//
-// Reads the entire file on construction.  Columns are accessed by name.
-// Handles quoted fields and leading/trailing whitespace.
+// Lightweight column-oriented CSV reader. Reads the whole file on construction; columns accessed by name.
 
 #include <filesystem>
 #include <string>

@@ -14,7 +14,7 @@ The pipeline is implemented as `StackedEnsemblePipeline` (selected by pipeline k
 | `S` | 3 | Sequence length (read from manifest) |
 | `M` | 15 | Base model count (read from manifest) |
 | `D` | 16–17 | Total feature dim (K + driver_dim); inferred from `stats_ts.bin` |
-| `DECODE_BATCH` | 120 | Max latent vectors per decoder call (read from manifest) |
+| `DECODE_BATCH` | 120 | Max latent vectors per decoder call (read from manifest; capped lower via `decode_batch_size` config) |
 
 ---
 
@@ -34,6 +34,7 @@ Defined in `include/rope/forecast/pipeline.h`.
 | `decoder_device` | `"cpu"` | LibTorch device string for decoder |
 | `compute_uncertainty` | `true` | When false, skips UT; sets uncertainty to zero |
 | `decode_chunk_hours` | `72` | Bounds peak memory during decode (see "Streaming decode" below). `<=0` = one chunk covering the whole horizon |
+| `decode_batch_size` | `0` | Caps the decoder's per-call batch below the manifest's `DECODE_BATCH` (never above). `<=0` = use the manifest value unchanged. See "Streaming decode" below |
 | `log` | nullptr | `std::function<void(std::string_view)>` called with load progress |
 
 ---
@@ -154,18 +155,20 @@ Every row of `mu_lat`/`times` (hour 0 through hour `H`, inclusive — `H+1` rows
 
 ---
 
-## Streaming decode (`decode_chunk_hours`)
+## Streaming decode (`decode_chunk_hours`, `decode_batch_size`)
 
-`chunk_hours <= 0` = one chunk (whole horizon). Otherwise:
+`chunk_hours <= 0` = one chunk (whole horizon). The grid-stitch buffers (`dens_sigmas`/`density_mean`/`uncertainty` in `run_streaming()`) scale with it:
 
 ```
 peak_bytes ≈ chunk_hours × N_SIG × voxels × 4 × 2   (uncertainty on, N_SIG = 2K+1)
 peak_bytes ≈ chunk_hours × voxels × 4                (uncertainty off)
 ```
 
-Reference model (`K=10`, 72×36×45 grid): ~19.6 MB/chunk-hour with uncertainty on. Default `decode_chunk_hours=72` ≈ 1.4 GB peak. `rope forecast` logs the computed estimate at start.
+Reference model (`K=10`, 72×36×45 grid): ~19.6 MB/chunk-hour with uncertainty on. `rope forecast` logs this estimate at start (`main.cpp`) — it covers the grid-stitch buffers only.
 
-This bounds the decode buffers only, not total process memory. Profiling found model loading is cheap (~0.1 GB) but the first inference call adds a largely fixed several-GB jump (observed ~2.7 GB at horizon=1) consistent with ONNX Runtime's/LibTorch's own arena allocator, not anything `decode_chunk_hours` controls.
+**The dominant memory cost is elsewhere:** the decoder network's own forward-pass working memory, which scales with the batch size of a single decoder call (`min(decode_batch_size, count_lat × N_SIG)`), not with `decode_chunk_hours` or horizon directly. Measured on the reference model: peak RSS scales roughly linearly with that batch size (~67 MB/sample), reproducing near-identically on both the ONNX Runtime and LibTorch decoder backends. Root cause (checked via ONNX shape inference on `coae_decoder.onnx`): the decoder keeps a high channel count through its final upsample stage — the last intermediate tensor before the 1-channel output projection is `[batch, 64, n_lst, n_lat, n_alt]`, not tapered down first. That's a property of the decoder's trained architecture, not something rope-framework's inference code controls. Since `N_SIG=21` with uncertainty on, this batch reaches `decode_batch_size`'s cap (120 by default) at a horizon of only ~5 hours, so the memory floor is reached early and stays roughly flat for longer horizons.
+
+`decode_batch_size` (Config field, default 0 = use the manifest's value) caps this batch, trading more sequential decoder calls for lower peak memory. It does not change results (BatchNormalization nodes use precomputed inference-time stats), but does shift ULP-level floating-point rounding versus a run at a different batch size, since the runtime's thread/tiling strategy is batch-size-dependent — repeated runs at the same batch size remain exactly reproducible.
 
 ---
 
@@ -194,6 +197,6 @@ This bounds the decode buffers only, not total process memory. Profiling found m
 ## Performance notes
 
 - **Base model rollout** is the dominant compute cost. OpenMP parallelizes across M models; always whole-horizon.
-- **Decoder** has two nested chunking levels: `decode_chunk_hours` (outer, voxel-space memory) and `DECODE_BATCH` (inner, one ONNX/LibTorch call's size).
+- **Decoder** has two nested chunking levels: `decode_chunk_hours` (outer, grid-stitch buffer memory) and `DECODE_BATCH`/`decode_batch_size` (inner, one ONNX/LibTorch call's size — the dominant memory cost; see "Streaming decode" above).
 - **UT is optional.** `compute_uncertainty = false` skips it.
 - **Driver lookup** is O(log N) binary search on sorted timestamps.

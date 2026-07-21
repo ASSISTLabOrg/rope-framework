@@ -105,13 +105,6 @@ auto db  = SpaceWeatherBin::load(bin_path);  // binary → SpaceWeatherDB
 SpaceWeatherBin::save(db, bin_path);          // SpaceWeatherDB → binary
 ```
 
-### DriverConfig
-
-```cpp
-auto dc = DriverConfig::try_load(exported_dir);  // std::optional<DriverConfig>
-// dc->columns, dc->source
-```
-
 ### DriverCacheManager
 
 ```cpp
@@ -142,12 +135,7 @@ auto table = IcBin::load(bin_path);    // binary → ICTable
 IcBin::save(table, bin_path);          // ICTable → binary
 ```
 
-### IcConfig
-
-```cpp
-auto ic = IcConfig::try_load(exported_dir);  // std::optional<IcConfig>
-// ic->latent_dim, ic->grid_axes
-```
+`grid_axes`/`latent_dim` come from `model_manifest.json` directly (`ModelManifest::ic_grid_axes`/`::latent_dim`) — no separate config file. See [driver-system.md](driver-system.md).
 
 ---
 

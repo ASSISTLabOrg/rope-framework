@@ -21,9 +21,7 @@
 
 namespace rope::forecast {
 
-// ---------------------------------------------------------------------------
-// Config — all paths and tuning parameters needed to construct a Pipeline.
-// ---------------------------------------------------------------------------
+// Paths and tuning parameters needed to construct a Pipeline.
 struct Config {
     // Directory produced by export_models.py.
     std::filesystem::path exported_dir;
@@ -55,31 +53,26 @@ struct Config {
     // Max forecast-hours of decoded voxel data held at once. <= 0: one chunk (whole horizon).
     int decode_chunk_hours = 72;
 
+    // Caps decoder batch size (<= 0: manifest value, only ever lowered); trades decoder calls for memory; ULP-level float drift vs. other values.
+    int decode_batch_size = 0;
+
     // Load-progress callback. Default (nullptr): silent.
     std::function<void(std::string_view)> log;
 };
 
-// ---------------------------------------------------------------------------
-// GridChunkSink — one contiguous slice of the grid, increasing t_offset order.
-// LatentSink — the full (H, latent_dim) latent trajectory, called once.
-// ---------------------------------------------------------------------------
+// GridChunkSink: one contiguous grid slice, increasing t_offset. LatentSink: full (H, latent_dim) trajectory, called once.
 using GridChunkSink = std::function<void(int t_offset,
                                           std::span<const std::int64_t> times,
                                           std::span<const float> density,
                                           std::span<const float> uncertainty)>;
 using LatentSink = std::function<void(std::span<const float> latent_mean)>;
 
-// ---------------------------------------------------------------------------
-// Pipeline — abstract interface; constructed by load().
-// ---------------------------------------------------------------------------
+// Abstract interface; constructed by load().
 class Pipeline {
 public:
     virtual ~Pipeline() = default;
 
-    // Collects run_streaming() into one in-memory ForecastGrid.
-    // Output spans hour 0 (start_iso) through hour `horizon`, inclusive —
-    // H_lat = horizon + 1 timesteps total.
-    // latent_mean_out, when non-null, is filled with the (H_lat, latent_dim) latent trajectory.
+    // Collects run_streaming() into one ForecastGrid; spans hour 0 through `horizon` inclusive (H_lat = horizon+1).
     ForecastGrid run(const std::string& start_iso, int horizon,
                      std::vector<float>* latent_mean_out = nullptr)
     {
@@ -118,15 +111,10 @@ public:
     virtual int latent_dim() const = 0;
 };
 
-// ---------------------------------------------------------------------------
-// load() — construct and initialize the pipeline from cfg. Throws on error.
-// ---------------------------------------------------------------------------
+// Constructs and initializes the pipeline from cfg. Throws on error.
 std::unique_ptr<Pipeline> load(const Config& cfg);
 
-// ---------------------------------------------------------------------------
-// config_from_reader() — build a Config from a parsed rope.conf.
-// Relative paths resolve against config_dir.
-// ---------------------------------------------------------------------------
+// Builds a Config from a parsed rope.conf; relative paths resolve against config_dir.
 Config config_from_reader(const io::ConfigReader& config,
                           const std::filesystem::path& config_dir);
 

@@ -42,10 +42,6 @@ public:
             if (t < H) {
                 // Slide the window: inp[0:S-1] = inp[1:S]
                 std::copy(inp.begin() + D_, inp.begin() + S_ * D_, inp.begin());
-
-                // Fill last row: latents ← prediction, drivers ← x_chunk[t]'s
-                // own driver — window t's last row is fcast_rows[t] (hour t),
-                // matching the hour t prediction just written into this row.
                 float* last_row = inp.data() + (S_ - 1) * D_;
                 std::copy(out_buf.begin(), out_buf.end(), last_row);
 

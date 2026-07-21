@@ -11,45 +11,27 @@ struct DriverSource {
     std::string description;
 };
 
-// Registry of known online sources, keyed by the "source" field in
-// driver_config.json.  Edit driver_cache.cpp to add new entries.
+// Known online sources, keyed by driver_config.json's "source" field. Edit driver_cache.cpp to add entries.
 const std::unordered_map<std::string, DriverSource>& known_sources();
 
-// ---------------------------------------------------------------------------
-// DriverCacheManager
-// ---------------------------------------------------------------------------
-// Maintains a local cache of driver .swbin files refreshed from online
-// sources.  Integrated into Pipeline::load() so auto-refresh fires
-// regardless of how the pipeline is invoked (CLI, C API, Python bindings).
-//
-// Download requires HTTP(S) support (cpp-httplib + OpenSSL — to be wired in
-// once the convert_and_write() conversion stub is implemented).
-// ---------------------------------------------------------------------------
+// Local cache of driver .swbin files refreshed from online sources; wired into Pipeline::load() for auto-refresh.
 class DriverCacheManager {
 public:
     DriverCacheManager(std::filesystem::path cache_dir,
                        int max_age_hours = 24);
 
-    // Returns path to a fresh .swbin file for the given source name.
-    // Downloads and converts if stale; falls back to a stale file on failure
-    // when one exists.  Throws if the source is unknown or the cache is
-    // absent and download/conversion fails.
+    // Fresh .swbin path for `source`; refreshes if stale, falls back to a stale file on refresh failure.
     std::filesystem::path get_path(const std::string& source);
 
 private:
     bool is_stale(const std::filesystem::path& path) const;
     void refresh(const std::string& source, const std::filesystem::path& dest);
 
-    // Download the raw CelesTrak CSV.  Returns the raw text content.
-    // TODO: implement using cpp-httplib + OpenSSL.
+    // TODO: implement via cpp-httplib + OpenSSL.
     std::string download(const std::string& url);
 
-    // Convert raw CelesTrak CSV → ROPE internal format → write as .swbin.
-    //
-    // Input columns:  DATE, F10.7_OBS, F10.7_OBS_CENTER81, AP_AVG, AP1..AP8
-    // Output columns: datetime, f10, kp (hourly rows)
-    //
-    // TODO: implement Ap→Kp conversion and 3-hourly→hourly interpolation.
+    // CelesTrak CSV (DATE, F10.7_OBS, F10.7_OBS_CENTER81, AP_AVG, AP1..AP8) -> hourly (datetime, f10, kp).
+    // TODO: implement Ap->Kp conversion and 3-hourly->hourly interpolation.
     void convert_and_write(const std::string& raw_csv,
                            const std::filesystem::path& dest);
 

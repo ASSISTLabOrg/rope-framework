@@ -1,8 +1,5 @@
 #pragma once
 // onnx_model.h — ONNX Runtime backend for the forecast pipeline.
-//
-// Include only in translation units that construct or directly use OnnxModel.
-// Everything else goes through IModel / make_model().
 
 #include <filesystem>
 #include <iostream>

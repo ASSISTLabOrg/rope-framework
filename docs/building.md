@@ -37,8 +37,8 @@ ctest --test-dir build --output-on-failure
 | `ROPE_DOWNLOAD_DEPS` | `OFF` | Download ORT and LibTorch automatically during configure |
 | `ROPE_HARDWARE` | `cpu` | Hardware variant: `cpu`, `cuda12`, `cuda11`, `rocm6` |
 | `ROPE_USE_LIBTORCH` | `ON` | Build the TorchScript decoder backend (requires LibTorch) |
+| `ROPE_USE_ZARR` | `ON` | Build `rope forecast --zarr` export support (needs zlib; auto-disables if zlib isn't found) |
 | `ROPE_BUILD_TESTS` | `OFF` | Build and register CTest unit/integration tests |
-| `ROPE_BUILD_LEGACY` | `OFF` | Also build the legacy `rope_demo` target |
 
 ### Dependency paths (when `ROPE_DOWNLOAD_DEPS=OFF`)
 
@@ -80,7 +80,7 @@ Downloads the CUDA 12 build of ORT. LibTorch CUDA is not auto-downloaded; supply
 
 ### ROCm 6 (Linux only)
 
-ORT ROCm builds are not on GitHub Releases. Use `scripts/get-ort-libs.sh --hardware rocm6` to obtain them, then set `ONNXRUNTIME_ROOT` manually.
+ORT ROCm builds are not auto-downloaded (`ROPE_DOWNLOAD_DEPS` fails loudly for `ROPE_HARDWARE=rocm6`). Obtain an ORT ROCm build yourself and set `ONNXRUNTIME_ROOT` manually.
 
 ---
 

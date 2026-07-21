@@ -50,25 +50,9 @@ hour_   : vector<int>
 
 ---
 
-## DriverConfig
+## Driver columns and source
 
-`include/rope/io/driver_config.h`, `src/io/driver_config.cpp`
-
-Loaded from `<exported_dir>/driver_config.json`. Declares which columns the model was trained on:
-
-```json
-{
-  "version": 1,
-  "columns": ["f10", "kp", "t1", "t2", "t3", "t4"],
-  "source": "celestrak_sw"
-}
-```
-
-`columns` replaces the earlier implicit `DriverCols::Six/Seven` inference from `stats_ts.bin`. Valid names are the fields of `DriverRow`: `f10`, `kp`, `t1`, `t2`, `t3`, `t4`, `doy`, `hour_int`.
-
-`source` names a registered online source (see `DriverCacheManager`). If absent, only `driver_path` can supply data.
-
-When `driver_config.json` is absent, `Pipeline::load()` falls back to inferring columns from `stats_ts.bin`'s `driver_dim` (6 → `[f10,kp,t1,t2,t3,t4]`, 7 → adds `doy`).
+Declared directly in `model_manifest.json` (top-level, required fields — no separate config file): `driver_columns` (array; valid names are `DriverRow`'s fields — `f10`, `kp`, `t1`, `t2`, `t3`, `t4`, `doy`, `hour_int`) and `driver_source` (a registered online source name; see `DriverCacheManager`). Both are parsed by `ModelManifest::load()` (`include/rope/io/model_manifest.h`). See the project's agent-facing knowledge base (`model-registry.md`) for the full manifest schema.
 
 ---
 
@@ -99,7 +83,7 @@ Manages a local cache of `.swbin` files refreshed from online sources. Integrate
 **Data resolution priority** (in `Pipeline::load()`):
 ```
 1. Config.driver_path is set → use it directly (no cache, no network)
-2. driver_config.json has "source" → DriverCacheManager::get_path(source)
+2. manifest.driver_source is set → DriverCacheManager::get_path(source)
 3. Neither → throw "no driver data source configured"
 ```
 
@@ -169,7 +153,7 @@ Maps (F10, Kp) → K-dimensional latent initial conditions. Used to seed `mu_lat
 2. `get_latent_coeffs(f10, kp)` → bilinear interpolation on the (F10, Kp) grid if the query is within the convex hull
 3. Falls back to nearest-neighbour if outside the hull
 
-**IcConfig** (`include/rope/io/ic_config.h`) declares `grid_axes` and `latent_dim` in `<exported_dir>/ic_config.json`. When absent, defaults to `["f10", "kp"]` and `K=10`. The table auto-detects K from the CSV's column count (`y1, y2, …`).
+`grid_axes` is declared in `model_manifest.json`'s top-level `ic.params.grid_axes` (required); `latent_dim` is the manifest's top-level `latent_dim`. Loaded behind the `IICSource` interface via `make_ic_source(dir, manifest.ic_kind)` (`src/forecast/backends/`). See `model-registry.md` for the full `ic` block schema.
 
 The IC table is auto-discovered from `exported_dir`: tries `ic_table.icbin` first, then `ic_table.csv`.
 

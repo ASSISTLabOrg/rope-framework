@@ -7,10 +7,10 @@ Reference for contributors and integrators working with the ROPE source code dir
 | [architecture.md](architecture.md) | System overview, module map, data flow, design principles |
 | [building.md](building.md) | CMake options, dependency management, test categories, packaging |
 | [pipeline.md](pipeline.md) | The full inference pipeline step by step: driver loading, sequence building, base model rollout, meta fusion, Unscented Transform, latent decoding |
-| [driver-system.md](driver-system.md) | SpaceWeatherDB, DriverConfig, DriverCacheManager, binary formats, IC table, preprocessing script |
+| [driver-system.md](driver-system.md) | SpaceWeatherDB, DriverCacheManager, binary formats, IC table, preprocessing script |
 | [interpolation.md](interpolation.md) | ForecastGrid structure, coordinate handling, trilinear spatial interpolation in log₁₀ space, temporal blending |
 | [forecast-cache-format.md](forecast-cache-format.md) | The on-disk forecast-grid cache file: layout, atomic writes, memory-mapped reads |
-| [model-artifacts.md](model-artifacts.md) | ONNX models, stats files, driver_config.json, ic_config.json, version compatibility |
+| [model-artifacts.md](model-artifacts.md) | ONNX models, stats files, manifest-driven driver/IC config, version compatibility |
 | [io.md](io.md) | CsvReader, ConfigReader, Stats/FeatureNormalizer, binary format details, adding new formats |
 | [adding-a-pipeline.md](adding-a-pipeline.md) | How to add a new pipeline kind: registry, manifest spec, checklist |
 | [version-control.md](version-control.md) | Branch model: main/develop/feature/bugfix conventions and release tagging |

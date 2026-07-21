@@ -7,11 +7,9 @@
 
 namespace rope::forecast {
 
-// Throws for unrecognized kinds.
 std::unique_ptr<Pipeline> create_pipeline_for_kind(
     const Config& cfg, const io::ModelManifest& manifest);
 
-// Inline so Cat A tests can call it without linking rope_forecast.
 inline std::vector<std::string> known_kinds() {
     return {"stacked_ensemble"};
 }

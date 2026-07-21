@@ -1,8 +1,5 @@
 #pragma once
-// UTC datetime utilities built on C++20 <chrono>.
-//
-// TimePoint is seconds since the Unix epoch (int64_t).
-// No platform-specific headers required.
+// UTC datetime utilities built on C++20 <chrono>; no platform-specific headers.
 
 #include <chrono>
 #include <cmath>

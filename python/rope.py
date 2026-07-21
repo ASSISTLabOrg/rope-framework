@@ -102,8 +102,6 @@ class Rope:
         conf_device   = _conf_get(resolved_conf, "decoder", "device", "cpu")
         self._device  = device if device is not None else conf_device
 
-        # If device is explicitly overridden, write a temp config so the
-        # forecast subprocess picks it up via --config.
         if device is not None and device != conf_device:
             self._temp_conf_path = _write_temp_conf(resolved_conf, "decoder", "device", device)
             self._config_path    = Path(self._temp_conf_path)
@@ -126,7 +124,7 @@ class Rope:
 
     @property
     def device(self) -> str:
-        """Active decoder device string (as will be passed to the server)."""
+        """Active decoder device string."""
         return self._device
 
     def __del__(self):
@@ -217,8 +215,7 @@ class Rope:
         if proc.returncode != 0:
             raise RopeError(6, (proc.stderr or proc.stdout).strip())
 
-        # Take the last non-empty line — guards against any preamble lines
-        # (e.g. duplicate response if a stale server was replaced mid-flight).
+        # Take the last non-empty line — guards against any preamble lines.
         lines = [l for l in proc.stdout.splitlines() if l.strip()]
         return json.loads(lines[-1])
 

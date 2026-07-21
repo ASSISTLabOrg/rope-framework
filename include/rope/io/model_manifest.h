@@ -51,8 +51,7 @@ struct ModelManifest {
     std::vector<std::string> driver_columns;
     std::string              driver_source;
 
-    // Physical shape of this model's output grid. Required — every model
-    // declares the grid it was trained/exported on.
+    // Required — every model declares the grid it was trained/exported on.
     GridSpec grid;
 
     // manifest.ic.kind. Not validated here — see forecast::make_ic_source().
@@ -64,9 +63,7 @@ struct ModelManifest {
     // Present iff kind == "stacked_ensemble".
     std::optional<StackedEnsembleSpec> stacked_ensemble;
 
-    // Throws on: missing file, malformed JSON, missing required fields,
-    // unsupported schema_version/kind, backend referenced without a matching
-    // runtime_requirements entry, or invalid decoder altitude ranges.
+    // Throws on missing/malformed file, unsupported schema_version/kind, or invalid fields.
     static ModelManifest load(const std::filesystem::path& exported_dir);
 };
 

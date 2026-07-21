@@ -1,9 +1,5 @@
 #pragma once
-// Space-weather database and hourly driver-window builder.
-//
-// SpaceWeatherDB loads the Celestrak CSV and provides O(log N) look-up.
-// DriverWindowBuilder assembles the full (seq_len-1 + H) row window needed
-// by the base models.
+// Space-weather database (O(log N) lookup) and hourly driver-window builder.
 
 #include "rope/core/datetime.h"
 #include "rope/io/csv_reader.h"
@@ -16,9 +12,7 @@
 
 namespace rope::io {
 
-// ---------------------------------------------------------------------------
-// DriverRow — one hour of derived driver features.
-// ---------------------------------------------------------------------------
+// One hour of derived driver features.
 struct DriverRow {
     TimePoint tp;
     float f10, kp;
@@ -27,15 +21,11 @@ struct DriverRow {
     int   hour_int;
 };
 
-// ---------------------------------------------------------------------------
-// SpaceWeatherDB
-// ---------------------------------------------------------------------------
 class SpaceWeatherBin;  // forward-declare for friend
 
 class SpaceWeatherDB {
 public:
-    // Load from file; format auto-detected from extension.
-    // ".swbin" → binary; anything else → CSV.
+    // Format auto-detected from extension (".swbin" -> binary, else CSV).
     static SpaceWeatherDB from_file(const std::filesystem::path& path);
 
     explicit SpaceWeatherDB(const std::filesystem::path& csv_path);
@@ -64,13 +54,9 @@ private:
     DriverRow make_row(std::size_t idx) const;
 };
 
-// ---------------------------------------------------------------------------
-// DriverWindowBuilder
-// ---------------------------------------------------------------------------
 class DriverWindowBuilder {
 public:
-    // Returns (seq_len-1 + horizon) DriverRows in chronological order.
-    // Throws if any hourly slot is missing from the database.
+    // Returns (seq_len-1 + horizon) DriverRows in chronological order; throws if any hourly slot is missing.
     static std::vector<DriverRow> build(const SpaceWeatherDB& db,
                                         std::string_view      start_iso,
                                         int horizon,

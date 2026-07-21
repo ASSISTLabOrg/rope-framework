@@ -29,9 +29,6 @@ public:
         std::vector<int64_t>&       output_shape
     ) = 0;
 
-    // Zero-copy IoBinding path: write directly into caller-supplied buffers.
-    // Returns true if the backend supports this path; false means the caller
-    // must fall back to infer().  Default: false (unsupported).
     virtual bool try_infer_into(
         float*                      input_buf,
         const std::vector<int64_t>& input_shape,

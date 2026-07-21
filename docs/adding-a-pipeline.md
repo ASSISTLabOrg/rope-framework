@@ -43,7 +43,7 @@ Create a new subdirectory `src/forecast/my_new_kind/` and put `my_new_kind_pipel
 
 The pipeline class must:
 - Inherit `Pipeline` from `include/rope/forecast/pipeline.h`
-- Implement `ForecastGrid run(const std::string& start_iso, int horizon) override`
+- Implement its pure-virtual methods: `run_streaming(start_iso, horizon, chunk_hours, sink, latent_sink)`, `grid_shape()`, `model_kind()`, `latent_dim()` — `run()` is concrete on the base class and calls `run_streaming()`
 - Take `(const Config& cfg, const io::ModelManifest& manifest)` in its constructor
 
 ### 5. `src/forecast/pipeline_registry.cpp` — register it
@@ -77,7 +77,7 @@ add_library(rope_forecast STATIC
 
 ## Constraints
 
-- The `Pipeline` interface has only one method: `run(start_iso, horizon)`. Initialization happens entirely in the constructor.
+- `run_streaming()` is the one method a new kind implements; initialization happens entirely in the constructor.
 - `Config` is the runtime config (`rope.conf` values). `ModelManifest` is the per-artifact spec. The pipeline constructor receives both.
 - `forecast-invariants.md` rules apply to any new pipeline: uncertainty is mandatory, fail loudly, deterministic output.
 - The `kind` string is part of the public contract (it appears in `model_manifest.json` alongside the artifacts). Treat changes to an existing kind's string as a breaking change.

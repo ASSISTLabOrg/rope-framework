@@ -181,7 +181,12 @@ void StackedEnsemblePipeline::load_decoder_stages(
     if (dec_threads <= 0)
         dec_threads = static_cast<int>(std::thread::hardware_concurrency());
 
-    log_("Loading " + std::to_string(spec.decoders.size()) + " decoder stage(s)\xe2\x80\xa6");
+    const int decode_batch = (cfg.decode_batch_size > 0)
+        ? std::min(cfg.decode_batch_size, DECODE_BATCH_)
+        : DECODE_BATCH_;
+
+    log_("Loading " + std::to_string(spec.decoders.size()) + " decoder stage(s)\xe2\x80\xa6"
+         "  decode_batch_size=" + std::to_string(decode_batch));
     decoder_stages_.reserve(spec.decoders.size());
 
     for (const auto& d : spec.decoders) {
@@ -224,7 +229,7 @@ void StackedEnsemblePipeline::load_decoder_stages(
                                      false, dec_device);
         stage.denorm    = std::make_unique<io::CAEDenormalizer>(stats_cae);
         stage.decoder   = std::make_unique<LatentDecoder>(
-            *stage.model, *stage.denorm, DECODE_BATCH_,
+            *stage.model, *stage.denorm, decode_batch,
             d.alt_end - d.alt_start, grid_shape_.n_lst, grid_shape_.n_lat);
     }
 }
@@ -343,9 +348,6 @@ void StackedEnsemblePipeline::run_streaming(
     const std::string& start_iso, int horizon, int chunk_hours,
     const GridChunkSink& sink, const LatentSink& latent_sink)
 {
-    // horizon is the number of autoregressive predictions beyond the given
-    // IC (hour 0). Output spans hour 0 through hour `horizon`, inclusive —
-    // H_lat = horizon + 1 timesteps total.
     const int H = horizon;
     const int S = S_;
     if (chunk_hours <= 0) chunk_hours = horizon + 1;
@@ -363,9 +365,6 @@ void StackedEnsemblePipeline::run_streaming(
     auto base_latents = run_base_rollout(x_chunk, H);
     auto [mu_lat, init_lat] = compute_mean_latents(x_chunk, base_latents, X_init, H);
 
-    // mu_lat is (H_lat, K) = (horizon + 1, K): the IC row (hour 0) followed
-    // by H predictions, aligned 1:1 with `times` below — the full
-    // trajectory, nothing dropped.
     if (latent_sink)
         latent_sink(std::span(mu_lat));
 

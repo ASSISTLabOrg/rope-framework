@@ -75,10 +75,6 @@ MappedFile& MappedFile::operator=(MappedFile&& other) noexcept {
 MappedFile::~MappedFile() = default;
 
 MappedFile MappedFile::open_readonly(const std::filesystem::path& path) {
-    // FILE_SHARE_DELETE (alongside FILE_SHARE_READ) lets a concurrent
-    // `rope forecast` atomically replace this file (temp+rename) while we
-    // still hold it mapped -- reproducing POSIX's unlink/rename-while-open
-    // behavior, which Windows does not give for free otherwise.
     HANDLE file = ::CreateFileW(
         path.c_str(), GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_DELETE,

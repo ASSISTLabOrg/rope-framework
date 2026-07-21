@@ -18,9 +18,7 @@
 //   float32 density[H * n_lst*n_lat*n_alt]
 //   float32 uncertainty[H * n_lst*n_lat*n_alt]
 //
-// The header carries the full GridSpec (counts *and* physical ranges), not
-// just counts, because a reader of this file never has access to the model
-// manifest that produced it.
+// Header carries the full GridSpec (counts and physical ranges) since readers have no access to the source manifest.
 
 #include "rope/core/types.h"
 #include "rope/io/forecast_cache_errors.h"
@@ -34,18 +32,14 @@ namespace rope::io {
 
 class ForecastGridBin {
 public:
-    // Throws ForecastCacheMissingError if the file doesn't exist,
-    // ForecastCacheCorruptError on bad magic/version/shape/truncation.
+    // Throws ForecastCacheMissingError/CorruptError.
     static ForecastGrid load(const std::filesystem::path& path);
 
-    // Atomically replaces `path` (write to a temp file in the same
-    // directory, then rename) — a reader never observes a partial file.
-    // Throws std::runtime_error if `grid` is malformed (H<=0, or array
-    // sizes inconsistent with H * grid.shape.voxels()).
+    // Atomically replaces `path` (temp file + rename); throws std::runtime_error if `grid` is malformed.
     static void save(const ForecastGrid& grid, const std::filesystem::path& path);
 };
 
-// Streaming counterpart to ForecastGridBin::save() -- produces a byte-identical file.
+// Streaming counterpart to ForecastGridBin::save() — produces a byte-identical file.
 class ForecastGridBinWriter {
 public:
     static ForecastGridBinWriter open(const GridSpec& shape, int H,

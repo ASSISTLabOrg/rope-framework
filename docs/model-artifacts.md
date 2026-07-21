@@ -8,7 +8,8 @@ All runtime artifacts live in a single flat directory (`exported_dir`, configure
 
 ```
 <exported_dir>/
-    base_model_00.onnx  …  base_model_14.onnx   # 15 base temporal models
+    model_manifest.json                           # self-describing manifest; drives everything below
+    base_model_00.onnx  …  base_model_14.onnx     # 15 base temporal models
     meta_model.onnx                               # ensemble fusion
     coae_decoder.onnx                             # ONNX Runtime decoder (default)
     coae_decoder.pt                               # LibTorch TorchScript decoder (optional)
@@ -16,10 +17,10 @@ All runtime artifacts live in a single flat directory (`exported_dir`, configure
     stats_ts.bin                                  # feature normalizer statistics
     stats_cae.bin                                 # CAE denormalizer statistics
     meta_model_out_shape.bin                      # meta model output shape metadata
-    driver_config.json                            # driver column spec + data source
-    ic_config.json                                # IC table schema
     ic_table.icbin                                # IC lookup table (binary)
 ```
+
+See the project's agent-facing knowledge base (`model-registry.md`) for the full `model_manifest.json` schema — driver columns/source, IC config, and grid shape are all declared there, not in separate files.
 
 ---
 
@@ -74,7 +75,7 @@ density_phys = 10 ^ (output_norm × σ_cae + μ_cae)
 
 where `(μ_cae, σ_cae)` come from `stats_cae.bin`. This step is applied by `CAEDenormalizer::apply_inplace()` in the `LatentDecoder`.
 
-The decoder is the most compute-intensive step for long horizons (or when UT is enabled, where it processes `H×21` inputs). It is called with batches of up to `DECODE_BATCH=120` latent vectors.
+The decoder is the most compute-intensive step for long horizons (or when UT is enabled, where it processes `H×21` inputs). It is called with batches of up to `decode_batch_size` latent vectors (manifest default 120; capped lower via `rope.conf`'s `forecast.decode_batch_size` — see [pipeline.md](pipeline.md)).
 
 **Backend selection:** ONNX Runtime is the default. If built with `ROPE_USE_LIBTORCH=ON`, the `.pt` TorchScript file is used instead and respects `decoder.device = cuda`.
 
@@ -97,7 +98,7 @@ float32 sigma[N]
 - `norm_driver_inplace(float* drv)` — normalizes only the driver portion (during rollout)
 - `denorm_latents_inplace(float* z)` — recovers physical latents from normalized latents
 
-The shape of `stats_ts.bin` implicitly determines `D`, which determines `driver_dim = D - K`. This is used as the backward-compat fallback when `driver_config.json` is absent.
+The shape of `stats_ts.bin` implicitly determines `D`, which determines `driver_dim = D - K`.
 
 ---
 
@@ -113,37 +114,14 @@ The shape is read at load time and the correct denormalization logic is selected
 
 ---
 
-## `driver_config.json`
+## Driver columns and IC config
 
-Declares the driver columns the model was trained on and the default online data source:
+Both declared as top-level, required fields in `model_manifest.json` — no separate config files:
 
-```json
-{
-  "version": 1,
-  "columns": ["f10", "kp", "t1", "t2", "t3", "t4"],
-  "source": "celestrak_sw"
-}
-```
+- `driver_columns` (array) + `driver_source` (string) drive `fill_driver()` in the pipeline, which dispatches by column name at runtime. Adding a new driver feature (e.g. `ap`, `dst`) is a training-time decision — no code changes required. `driver_source` is the key passed to `DriverCacheManager::get_path()` when no explicit `driver_path` is set.
+- `ic.params.grid_axes` and the top-level `latent_dim` validate that the loaded IC table matches the model's expected `K`.
 
-`columns` drives `fill_driver()` in the pipeline, which dispatches by column name at runtime. Adding a new driver feature (e.g. `ap`, `dst`) is a training-time decision — no code changes required.
-
-`source` is the key passed to `DriverCacheManager::get_path()` when no explicit `driver_path` is set.
-
----
-
-## `ic_config.json`
-
-Declares the IC table schema:
-
-```json
-{
-  "version": 1,
-  "grid_axes": ["f10", "kp"],
-  "latent_dim": 10
-}
-```
-
-Used to validate that the loaded IC table matches the model's expected `K`. When absent, the table auto-detects K from its columns.
+See `model-registry.md` for the full schema.
 
 ---
 

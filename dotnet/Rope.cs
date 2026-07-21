@@ -4,12 +4,7 @@
  * Wraps librope via P/Invoke for fast in-process interpolation queries
  * against a memory-mapped forecast-grid cache file, and the rope CLI
  * subprocess to run forecasts (which write that cache file).
- *
- * Targets both .NET Framework 4.8 and .NET 8 from a single source file —
- * avoids System.Runtime.InteropServices.NativeLibrary and System.Text.Json,
- * neither of which exist on .NET Framework, in favor of a small P/Invoke
- * loader and minimal JSON field extraction.
- *
+ * 
  * Typical usage
  * -------------
  *     using RopeFramework;
