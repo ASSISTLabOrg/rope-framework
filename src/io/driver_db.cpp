@@ -8,6 +8,28 @@
 namespace rope::io {
 
 // ---------------------------------------------------------------------------
+// DriverRow::get()
+// ---------------------------------------------------------------------------
+float DriverRow::get(std::string_view name) const {
+    if (name == "t1") return t1;
+    if (name == "t2") return t2;
+    if (name == "t3") return t3;
+    if (name == "t4") return t4;
+
+    for (const auto& [n, v] : raw)
+        if (n == name) return v;
+
+    if (name == "doy" || name == "hour_int") {
+        int h, doy, yr;
+        unpack(tp, h, doy, yr);
+        return name == "hour_int" ? static_cast<float>(h)
+                                   : static_cast<float>(doy) + h / 24.0f;
+    }
+
+    throw std::runtime_error("DriverRow::get: unknown column '" + std::string(name) + "'");
+}
+
+// ---------------------------------------------------------------------------
 // from_file() — dispatch on extension
 // ---------------------------------------------------------------------------
 SpaceWeatherDB SpaceWeatherDB::from_file(const std::filesystem::path& path) {
@@ -17,19 +39,30 @@ SpaceWeatherDB SpaceWeatherDB::from_file(const std::filesystem::path& path) {
 }
 
 // ---------------------------------------------------------------------------
+// reject_reserved_names()
+// ---------------------------------------------------------------------------
+void SpaceWeatherDB::reject_reserved_names(const std::vector<std::string>& names) {
+    static const std::vector<std::string> reserved = {"t1", "t2", "t3", "t4"};
+    for (const auto& n : names) {
+        if (std::find(reserved.begin(), reserved.end(), n) != reserved.end())
+            throw std::runtime_error(
+                "SpaceWeatherDB: '" + n + "' is a reserved, always-derived driver name "
+                "and cannot be supplied by a raw data source");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Private constructor (used by SpaceWeatherBin::load)
 // ---------------------------------------------------------------------------
-SpaceWeatherDB::SpaceWeatherDB(std::vector<TimePoint> times,
-                               std::vector<float>     f10,
-                               std::vector<float>     kp,
-                               std::vector<float>     doy,
-                               std::vector<int>       hour)
+SpaceWeatherDB::SpaceWeatherDB(std::vector<TimePoint>          times,
+                               std::vector<std::string>        raw_names,
+                               std::vector<std::vector<float>> raw_data)
     : times_(std::move(times))
-    , f10_(std::move(f10))
-    , kp_(std::move(kp))
-    , doy_(std::move(doy))
-    , hour_(std::move(hour))
-{}
+    , raw_names_(std::move(raw_names))
+    , raw_data_(std::move(raw_data))
+{
+    reject_reserved_names(raw_names_);
+}
 
 // ---------------------------------------------------------------------------
 // CSV constructor
@@ -39,17 +72,19 @@ SpaceWeatherDB::SpaceWeatherDB(const std::filesystem::path& csv_path) {
     const std::size_t N = csv.nrows();
 
     times_.reserve(N);
-    f10_.reserve(N);
-    kp_.reserve(N);
-    doy_.reserve(N);
-    hour_.reserve(N);
-
-    for (std::size_t i = 0; i < N; ++i) {
+    for (std::size_t i = 0; i < N; ++i)
         times_.push_back(parse_datetime(csv.get("datetime", i)));
-        f10_.push_back(csv.get_float("f10", i));
-        kp_.push_back(csv.get_float("kp",  i));
-        doy_.push_back(csv.has_column("doy")  ? csv.get_float("doy",  i) : 0.0f);
-        hour_.push_back(csv.has_column("hour") ? csv.get_int("hour", i)  : 0);
+
+    for (const auto& name : csv.column_names())
+        if (name != "datetime")
+            raw_names_.push_back(name);
+    reject_reserved_names(raw_names_);
+
+    raw_data_.resize(raw_names_.size());
+    for (std::size_t j = 0; j < raw_names_.size(); ++j) {
+        raw_data_[j].reserve(N);
+        for (std::size_t i = 0; i < N; ++i)
+            raw_data_[j].push_back(csv.get_float(raw_names_[j], i));
     }
 
     // Ensure sorted by time.
@@ -58,21 +93,14 @@ SpaceWeatherDB::SpaceWeatherDB(const std::filesystem::path& csv_path) {
         std::iota(idx.begin(), idx.end(), std::size_t{0});
         std::sort(idx.begin(), idx.end(),
                   [&](std::size_t a, std::size_t b){ return times_[a] < times_[b]; });
-        auto reorder = [&](auto& v){
+        auto reorder = [&](std::vector<TimePoint>& v){
             auto tmp = v;
             for (std::size_t i = 0; i < N; ++i) v[i] = tmp[idx[i]];
         };
-        reorder(times_); reorder(f10_); reorder(kp_);
-        reorder(doy_);   reorder(hour_);
-    }
-
-    // Fill missing doy/hour from the TimePoint.
-    for (std::size_t i = 0; i < N; ++i) {
-        if (hour_[i] == 0 && doy_[i] == 0.0f) {
-            int h, doy, yr;
-            unpack(times_[i], h, doy, yr);
-            hour_[i] = h;
-            doy_[i]  = static_cast<float>(doy) + h / 24.0f;
+        reorder(times_);
+        for (auto& col : raw_data_) {
+            auto tmp = col;
+            for (std::size_t i = 0; i < N; ++i) col[i] = tmp[idx[i]];
         }
     }
 }
@@ -87,13 +115,14 @@ DriverRow SpaceWeatherDB::lookup(TimePoint tp) const {
 
 DriverRow SpaceWeatherDB::make_row(std::size_t idx) const {
     DriverRow r;
-    r.tp       = times_[idx];
-    r.f10      = f10_[idx];
-    r.kp       = kp_[idx];
-    r.hour_int = hour_[idx];
-    r.doy      = doy_[idx];
+    r.tp = times_[idx];
     float cont_doy;
     harmonics(r.tp, r.t1, r.t2, r.t3, r.t4, cont_doy);
+
+    r.raw.reserve(raw_names_.size());
+    for (std::size_t j = 0; j < raw_names_.size(); ++j)
+        r.raw.emplace_back(raw_names_[j], raw_data_[j][idx]);
+
     return r;
 }
 

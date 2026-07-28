@@ -25,8 +25,17 @@ static const char* VALID_3BM = R"({
   "kind": "stacked_ensemble",
   "runtime_requirements": { "onnxruntime": "1.25" },
   "latent_dim": 10,
-  "driver_columns": ["f10", "kp", "t1", "t2", "t3", "t4"],
-  "driver_source": "celestrak_sw",
+  "drivers": {
+    "source": "celestrak_sw",
+    "columns": [
+      { "name": "f10", "description": "d" },
+      { "name": "kp", "description": "d" },
+      { "name": "t1", "description": "d" },
+      { "name": "t2", "description": "d" },
+      { "name": "t3", "description": "d" },
+      { "name": "t4", "description": "d" }
+    ]
+  },
   "validated": false,
   "grid": { "n_lst": 72, "n_lat": 36, "n_alt": 45,
             "lat_min_deg": -87.5, "lat_max_deg": 87.5,
@@ -76,10 +85,10 @@ TEST_CASE("ModelManifest: missing schema_version throws") {
     write_manifest(R"({
       "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -95,8 +104,8 @@ TEST_CASE("ModelManifest: missing latent_dim throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "driver_columns": ["f10"], "driver_source": "s", "validated": false,
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]}, "validated": false,
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -108,12 +117,12 @@ TEST_CASE("ModelManifest: missing latent_dim throws") {
     );
 }
 
-TEST_CASE("ModelManifest: missing driver_columns throws") {
+TEST_CASE("ModelManifest: missing drivers throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_source": "s", "validated": false,
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "latent_dim": 10, "validated": false,
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -121,6 +130,42 @@ TEST_CASE("ModelManifest: missing driver_columns throws") {
     })", "rope_mtest_nodcols");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_nodcols"),
+        std::runtime_error
+    );
+}
+
+TEST_CASE("ModelManifest: drivers.columns entry missing name throws") {
+    write_manifest(R"({
+      "schema_version": 1, "kind": "stacked_ensemble",
+      "runtime_requirements": {"onnxruntime":"1.25"},
+      "latent_dim": 10, "validated": false,
+      "drivers": {"source": "s", "columns": [{"description": "d"}]},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
+        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"},
+        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+    })", "rope_mtest_colnoname");
+    REQUIRE_THROWS_AS(
+        ModelManifest::load(fs::temp_directory_path() / "rope_mtest_colnoname"),
+        std::runtime_error
+    );
+}
+
+TEST_CASE("ModelManifest: drivers.columns entry missing description throws") {
+    write_manifest(R"({
+      "schema_version": 1, "kind": "stacked_ensemble",
+      "runtime_requirements": {"onnxruntime":"1.25"},
+      "latent_dim": 10, "validated": false,
+      "drivers": {"source": "s", "columns": [{"name": "f10"}]},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
+      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
+        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"},
+        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+    })", "rope_mtest_colnodesc");
+    REQUIRE_THROWS_AS(
+        ModelManifest::load(fs::temp_directory_path() / "rope_mtest_colnodesc"),
         std::runtime_error
     );
 }
@@ -133,7 +178,7 @@ TEST_CASE("ModelManifest: unsupported kind throws") {
       "schema_version": 1,
       "kind": "future_kind_that_does_not_exist",
       "runtime_requirements": {},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false
     })", "rope_mtest_badkind");
     REQUIRE_THROWS_AS(
@@ -149,7 +194,7 @@ TEST_CASE("ModelManifest: unsupported schema_version throws") {
     write_manifest(R"({
       "schema_version": 99, "kind": "stacked_ensemble",
       "runtime_requirements": {}, "latent_dim": 10,
-      "driver_columns": ["f10"], "driver_source": "s", "validated": false
+      "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]}, "validated": false
     })", "rope_mtest_badver");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_badver"),
@@ -164,7 +209,7 @@ TEST_CASE("ModelManifest: missing ic throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
@@ -182,10 +227,10 @@ TEST_CASE("ModelManifest: ic missing kind throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
-      "ic": {"params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -201,7 +246,7 @@ TEST_CASE("ModelManifest: ic.params missing grid_axes throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"file":"ic_table.icbin"}},
@@ -220,7 +265,7 @@ TEST_CASE("ModelManifest: valid top-level ic block parses") {
     auto dir = write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10","kp"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}, {"name": "kp", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
@@ -243,10 +288,10 @@ TEST_CASE("ModelManifest: onnx backend without onnxruntime version throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -262,10 +307,10 @@ TEST_CASE("ModelManifest: libtorch backend without libtorch version throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -300,9 +345,9 @@ TEST_CASE("ModelManifest: missing grid throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -318,10 +363,10 @@ TEST_CASE("ModelManifest: grid.lat_min_deg >= lat_max_deg throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":87.5,"lat_max_deg":-87.5,"alt_min_km":100.0,"alt_max_km":980.0},
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -338,10 +383,10 @@ TEST_CASE("ModelManifest: grid with a different physical shape parses") {
     auto dir = write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":36,"n_lat":18,"n_alt":20,"lat_min_deg":-60.0,"lat_max_deg":60.0,"alt_min_km":150.0,"alt_max_km":500.0},
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -362,10 +407,10 @@ TEST_CASE("ModelManifest: altitude gap throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -385,10 +430,10 @@ TEST_CASE("ModelManifest: altitude overlap throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -407,10 +452,10 @@ TEST_CASE("ModelManifest: first alt_start != 0 throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -428,10 +473,10 @@ TEST_CASE("ModelManifest: last alt_end != grid.n_alt throws") {
     write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},
@@ -450,7 +495,7 @@ TEST_CASE("ModelManifest: valid two-stage altitude split parses") {
     auto dir = write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25","libtorch":"2.7"},
-      "latent_dim": 10, "driver_columns": ["f10","kp"], "driver_source": "celestrak_sw",
+      "latent_dim": 10, "drivers": {"source": "celestrak_sw", "columns": [{"name": "f10", "description": "d"}, {"name": "kp", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
@@ -483,10 +528,10 @@ TEST_CASE("ModelManifest: out-of-order decoder stages are sorted on load") {
     auto dir = write_manifest(R"({
       "schema_version": 1, "kind": "stacked_ensemble",
       "runtime_requirements": {"onnxruntime":"1.25"},
-      "latent_dim": 10, "driver_columns": ["f10"], "driver_source": "s",
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
-      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10"],"file":"ic_table.icbin"}},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
       "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
         "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
         "meta_model":{"file":"m.onnx","backend":"onnx"},

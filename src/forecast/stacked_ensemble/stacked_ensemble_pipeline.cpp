@@ -31,18 +31,17 @@ namespace fs = std::filesystem;
 static void fill_driver(const io::DriverRow&            row,
                         const std::vector<std::string>& cols,
                         float*                          out) {
-    for (int i = 0; i < static_cast<int>(cols.size()); ++i) {
-        const auto& c = cols[i];
-        if      (c == "f10")      out[i] = row.f10;
-        else if (c == "kp")       out[i] = row.kp;
-        else if (c == "t1")       out[i] = row.t1;
-        else if (c == "t2")       out[i] = row.t2;
-        else if (c == "t3")       out[i] = row.t3;
-        else if (c == "t4")       out[i] = row.t4;
-        else if (c == "doy")      out[i] = row.doy;
-        else if (c == "hour_int") out[i] = static_cast<float>(row.hour_int);
-        else throw std::runtime_error("fill_driver: unknown column '" + c + "'");
+    for (int i = 0; i < static_cast<int>(cols.size()); ++i)
+        out[i] = row.get(cols[i]);
+}
+
+static std::string join(const std::vector<std::string>& v) {
+    std::string s = "[";
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        if (i) s += ", ";
+        s += v[i];
     }
+    return s + "]";
 }
 
 static ModelBackend parse_backend(const std::string& s) {
@@ -119,6 +118,10 @@ void StackedEnsemblePipeline::load_ic_source(
             "StackedEnsemblePipeline: manifest latent_dim=" +
             std::to_string(K_) + " does not match IC source latent_dim=" +
             std::to_string(ic_source_->latent_dim()));
+    if (ic_source_->axis_names() != manifest.ic_grid_axes)
+        throw std::runtime_error(
+            "StackedEnsemblePipeline: IC source axes " + join(ic_source_->axis_names()) +
+            " do not match manifest ic.params.grid_axes " + join(manifest.ic_grid_axes));
 }
 
 void StackedEnsemblePipeline::load_sw_db(const Config& cfg) {
@@ -245,12 +248,17 @@ std::vector<float> StackedEnsemblePipeline::build_X_init_norm(
     const int D  = ts_norm_->total_dim();
     const int Dd = ts_norm_->driver_dim();
 
+    const auto&        ic_axes = ic_source_->axis_names();
+    std::vector<float> axis_vals(ic_axes.size());
+
     std::vector<float> X(static_cast<size_t>(S_) * D, 0.0f);
     for (int s = 0; s < S_; ++s) {
         const io::DriverRow& row  = hist_rows[s];
         float*               dest = X.data() + s * D;
 
-        std::vector<float> coeffs = ic_source_->get_latent_coeffs(row.f10, row.kp);
+        for (std::size_t a = 0; a < ic_axes.size(); ++a)
+            axis_vals[a] = row.get(ic_axes[a]);
+        std::vector<float> coeffs = ic_source_->get_latent_coeffs(axis_vals);
         for (int k = 0; k < K; ++k)
             dest[k] = coeffs[k];
 

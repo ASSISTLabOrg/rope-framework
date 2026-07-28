@@ -34,9 +34,46 @@ TEST_CASE("SpaceWeatherDB: loads CSV and reports size and time range") {
 TEST_CASE("SpaceWeatherDB: lookup returns the matching row") {
     auto db = rope::io::SpaceWeatherDB::from_file(make_driver_csv());
     auto row = db.lookup(rope::parse_datetime("2024-01-01T02:00:00"));
-    CHECK_THAT(row.f10, WithinAbs(122.0f, 1e-4f));
-    CHECK_THAT(row.kp,  WithinAbs(2.2f,   1e-4f));
-    CHECK(row.hour_int == 2);
+    CHECK_THAT(row.get("f10"), WithinAbs(122.0f, 1e-4f));
+    CHECK_THAT(row.get("kp"),  WithinAbs(2.2f,   1e-4f));
+    CHECK(row.get("hour_int") == 2.0f);
+}
+
+TEST_CASE("SpaceWeatherDB: loads an arbitrary extra raw column by name") {
+    auto path = fs::temp_directory_path() / "rope_test_driver_db_extra.csv";
+    std::ofstream f(path);
+    f << "datetime,kp,ap\n"
+         "2024-01-01T00:00:00,2.0,7.5\n"
+         "2024-01-01T01:00:00,2.1,8.0\n";
+    f.close();
+
+    auto db  = rope::io::SpaceWeatherDB::from_file(path);
+    auto row = db.lookup(rope::parse_datetime("2024-01-01T01:00:00"));
+    CHECK_THAT(row.get("kp"), WithinAbs(2.1f, 1e-4f));
+    CHECK_THAT(row.get("ap"), WithinAbs(8.0f, 1e-4f));
+    REQUIRE_THROWS_AS(row.get("f10"), std::runtime_error);
+}
+
+TEST_CASE("SpaceWeatherDB: CSV header order does not matter") {
+    auto path = fs::temp_directory_path() / "rope_test_driver_db_shuffled.csv";
+    std::ofstream f(path);
+    f << "kp,datetime,f10\n"
+         "2.2,2024-01-01T02:00:00,122.0\n";
+    f.close();
+
+    auto db  = rope::io::SpaceWeatherDB::from_file(path);
+    auto row = db.lookup(rope::parse_datetime("2024-01-01T02:00:00"));
+    CHECK_THAT(row.get("f10"), WithinAbs(122.0f, 1e-4f));
+    CHECK_THAT(row.get("kp"),  WithinAbs(2.2f,   1e-4f));
+}
+
+TEST_CASE("SpaceWeatherDB: a raw CSV column literally named t1-t4 throws") {
+    auto path = fs::temp_directory_path() / "rope_test_driver_db_reserved.csv";
+    std::ofstream f(path);
+    f << "datetime,f10,t1\n2024-01-01T00:00:00,120.0,0.5\n";
+    f.close();
+
+    REQUIRE_THROWS_AS(rope::io::SpaceWeatherDB::from_file(path), std::runtime_error);
 }
 
 TEST_CASE("SpaceWeatherDB: lookup at a missing timestamp throws") {
@@ -80,7 +117,7 @@ TEST_CASE("SpaceWeatherBin: save/load round-trips through the binary format") {
     auto loaded = rope::io::SpaceWeatherBin::load(bin);
     CHECK(loaded.size() == db.size());
     auto row = loaded.lookup(rope::parse_datetime("2024-01-01T02:00:00"));
-    CHECK_THAT(row.f10, WithinAbs(122.0f, 1e-4f));
+    CHECK_THAT(row.get("f10"), WithinAbs(122.0f, 1e-4f));
 }
 
 TEST_CASE("SpaceWeatherDB: from_file dispatches .swbin extension to the binary loader") {
@@ -95,11 +132,11 @@ TEST_CASE("SpaceWeatherDB: from_file dispatches .swbin extension to the binary l
 TEST_CASE("SpaceWeatherBin: bad magic throws") {
     auto path = fs::temp_directory_path() / "rope_test_sw_bad_magic.swbin";
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    std::uint32_t bad_magic = 0xDEADBEEFu, version = 1u, nrows = 0u, reserved = 0u;
+    std::uint32_t bad_magic = 0xDEADBEEFu, version = 2u, nrows = 0u, ncols = 0u;
     f.write(reinterpret_cast<const char*>(&bad_magic), 4);
     f.write(reinterpret_cast<const char*>(&version),   4);
     f.write(reinterpret_cast<const char*>(&nrows),     4);
-    f.write(reinterpret_cast<const char*>(&reserved),  4);
+    f.write(reinterpret_cast<const char*>(&ncols),     4);
     f.close();
 
     REQUIRE_THROWS_AS(rope::io::SpaceWeatherBin::load(path), std::runtime_error);
@@ -108,11 +145,11 @@ TEST_CASE("SpaceWeatherBin: bad magic throws") {
 TEST_CASE("SpaceWeatherBin: unsupported version throws") {
     auto path = fs::temp_directory_path() / "rope_test_sw_bad_version.swbin";
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    std::uint32_t magic = 0x52505357u, bad_version = 99u, nrows = 0u, reserved = 0u;
+    std::uint32_t magic = 0x52505357u, bad_version = 99u, nrows = 0u, ncols = 0u;
     f.write(reinterpret_cast<const char*>(&magic),       4);
     f.write(reinterpret_cast<const char*>(&bad_version), 4);
     f.write(reinterpret_cast<const char*>(&nrows),       4);
-    f.write(reinterpret_cast<const char*>(&reserved),    4);
+    f.write(reinterpret_cast<const char*>(&ncols),       4);
     f.close();
 
     REQUIRE_THROWS_AS(rope::io::SpaceWeatherBin::load(path), std::runtime_error);
@@ -121,11 +158,16 @@ TEST_CASE("SpaceWeatherBin: unsupported version throws") {
 TEST_CASE("SpaceWeatherBin: truncated record data throws") {
     auto path = fs::temp_directory_path() / "rope_test_sw_truncated.swbin";
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    std::uint32_t magic = 0x52505357u, version = 1u, nrows = 5u, reserved = 0u;
+    std::uint32_t magic = 0x52505357u, version = 2u, nrows = 5u, ncols = 1u;
     f.write(reinterpret_cast<const char*>(&magic),    4);
     f.write(reinterpret_cast<const char*>(&version),  4);
     f.write(reinterpret_cast<const char*>(&nrows),    4);  // claims 5 rows
-    f.write(reinterpret_cast<const char*>(&reserved), 4);
+    f.write(reinterpret_cast<const char*>(&ncols),    4);
+    {
+        std::uint32_t name_len = 3;
+        f.write(reinterpret_cast<const char*>(&name_len), 4);
+        f.write("f10", 3);
+    }
     // ... but no record data follows.
     f.close();
 

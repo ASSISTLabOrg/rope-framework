@@ -116,10 +116,10 @@ The shape is read at load time and the correct denormalization logic is selected
 
 ## Driver columns and IC config
 
-Both declared as top-level, required fields in `model_manifest.json` — no separate config files:
+Both declared as top-level, required blocks in `model_manifest.json` (`drivers`, `ic`) — no separate config files:
 
-- `driver_columns` (array) + `driver_source` (string) drive `fill_driver()` in the pipeline, which dispatches by column name at runtime. Adding a new driver feature (e.g. `ap`, `dst`) is a training-time decision — no code changes required. `driver_source` is the key passed to `DriverCacheManager::get_path()` when no explicit `driver_path` is set.
-- `ic.params.grid_axes` and the top-level `latent_dim` validate that the loaded IC table matches the model's expected `K`.
+- `drivers.columns` (array of `{name, description}`) + `drivers.source` (string) drive `fill_driver()` in the pipeline, which now resolves each column generically via `DriverRow::get(name)` rather than a hardcoded per-name dispatch. Adding a new driver feature (e.g. `ap`, `dst`) really is a training-time decision now — no code changes required, as long as the raw data source (CSV or `.swbin`) actually supplies that column. `drivers.source` is the key passed to `DriverCacheManager::get_path()` when no explicit `driver_path` is set.
+- `ic.params.grid_axes` (exactly 2 axis names) and the top-level `latent_dim` validate that the loaded IC table matches the model's expected axes and `K` — the pipeline cross-checks the table's own auto-detected/stored axis names against `grid_axes` and throws on mismatch.
 
 See `model-registry.md` for the full schema.
 
@@ -127,7 +127,7 @@ See `model-registry.md` for the full schema.
 
 ## `ic_table.icbin`
 
-Binary IC lookup table (see [driver-system.md](driver-system.md) for the format). Maps (F10, Kp) to `K`-dimensional latent initial conditions via bilinear interpolation.
+Binary IC lookup table (see [driver-system.md](driver-system.md) for the v2 format). Maps a 2-axis grid (commonly F10, Kp, but declared per model via `ic.params.grid_axes`) to `K`-dimensional latent initial conditions via bilinear interpolation.
 
 Converted from `IC_Table_modified.csv` via `rope convert-ic`.
 

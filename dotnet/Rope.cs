@@ -22,6 +22,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -109,6 +110,10 @@ namespace RopeFramework
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void RopeCloseFn(IntPtr interp);
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int RopeGetManifestInfoFn(
+            byte* exportedDir, byte* buf, int bufLen, byte* errBuf, int errLen);
+
         // -------------------------------------------------------------------------
         // Fields
         // -------------------------------------------------------------------------
@@ -118,6 +123,7 @@ namespace RopeFramework
         private readonly RopeQueryFn       _ropeQuery;
         private readonly RopeQueryBatchFn  _ropeQueryBatch;
         private readonly RopeCloseFn       _ropeClose;
+        private readonly RopeGetManifestInfoFn _ropeGetManifestInfo;
 
         private readonly string _cachePath;
         private readonly string _exePath;
@@ -162,6 +168,7 @@ namespace RopeFramework
             _ropeQuery      = Load<RopeQueryFn>("rope_query");
             _ropeQueryBatch = Load<RopeQueryBatchFn>("rope_query_batch");
             _ropeClose      = Load<RopeCloseFn>("rope_close");
+            _ropeGetManifestInfo = Load<RopeGetManifestInfoFn>("rope_get_manifest_info");
 
             _cachePath  = cachePath;
             _exePath    = exePath;
@@ -240,59 +247,135 @@ namespace RopeFramework
         /// <param name="start">Forecast start time (UTC).</param>
         /// <param name="horizon">Forecast duration in hours.</param>
         public ForecastResult Forecast(DateTime start, int horizon) =>
-            Forecast(start.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss"), horizon);
+            Forecast(start.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss"), horizon, null);
 
         /// <summary>Run a forecast and atomically write the resulting grid to the cache file.</summary>
         /// <param name="start">ISO 8601 forecast start time string (UTC).</param>
         /// <param name="horizon">Forecast duration in hours.</param>
-        public ForecastResult Forecast(string start, int horizon)
+        public ForecastResult Forecast(string start, int horizon) =>
+            Forecast(start, horizon, null);
+
+        /// <summary>Run a forecast with explicit driver data, overriding paths.driver_path /
+        /// manifest.drivers.source for this call only.</summary>
+        /// <param name="start">Forecast start time (UTC).</param>
+        /// <param name="horizon">Forecast duration in hours.</param>
+        /// <param name="drivers">
+        ///   Explicit driver columns, e.g. {"datetime": [...], "f10": [...], "kp": [...]}.
+        ///   Must cover the full contiguous hourly window the model needs (history +
+        ///   horizon) -- same requirement as an explicit driver_path CSV, just supplied
+        ///   inline. All-or-nothing: a column the model needs but this dict omits is not
+        ///   backfilled from any other source.
+        /// </param>
+        public ForecastResult Forecast(DateTime start, int horizon, IDictionary<string, object[]> drivers) =>
+            Forecast(start.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss"), horizon, drivers);
+
+        /// <summary>Run a forecast with explicit driver data, overriding paths.driver_path /
+        /// manifest.drivers.source for this call only.</summary>
+        /// <param name="start">ISO 8601 forecast start time string (UTC).</param>
+        /// <param name="horizon">Forecast duration in hours.</param>
+        /// <param name="drivers">
+        ///   Explicit driver columns, e.g. {"datetime": [...], "f10": [...], "kp": [...]}.
+        ///   Must cover the full contiguous hourly window the model needs (history +
+        ///   horizon) -- same requirement as an explicit driver_path CSV, just supplied
+        ///   inline. All-or-nothing: a column the model needs but this dict omits is not
+        ///   backfilled from any other source.
+        /// </param>
+        public ForecastResult Forecast(string start, int horizon, IDictionary<string, object[]> drivers)
         {
             if (_exePath == null)
                 throw new InvalidOperationException(
                     "rope executable not found; pass exePath explicitly or check your package layout");
 
-            // --cache-path is a global option and must precede the subcommand name.
-            var sb = new StringBuilder();
-            if (_cachePath != null)
+            string tempDriverPath = drivers != null ? WriteTempDriverCsv(drivers) : null;
+            try
             {
-                sb.Append("--cache-path \"");
-                sb.Append(_cachePath);
-                sb.Append("\" ");
+                // --cache-path is a global option and must precede the subcommand name.
+                var sb = new StringBuilder();
+                if (_cachePath != null)
+                {
+                    sb.Append("--cache-path \"");
+                    sb.Append(_cachePath);
+                    sb.Append("\" ");
+                }
+                sb.Append("forecast --start \"");
+                sb.Append(start);
+                sb.Append("\" --horizon ");
+                sb.Append(horizon);
+                if (_configPath != null)
+                {
+                    sb.Append(" --config \"");
+                    sb.Append(_configPath);
+                    sb.Append('"');
+                }
+                if (tempDriverPath != null)
+                {
+                    sb.Append(" --driver \"");
+                    sb.Append(tempDriverPath);
+                    sb.Append('"');
+                }
+
+                var proc = Process.Start(new ProcessStartInfo(_exePath, sb.ToString())
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError  = true,
+                    UseShellExecute        = false,
+                });
+
+                string stdout = proc.StandardOutput.ReadToEnd();
+                string stderr = proc.StandardError.ReadToEnd();
+                proc.WaitForExit();
+
+                if (proc.ExitCode != 0)
+                    throw new RopeException(6, (stderr.Length > 0 ? stderr : stdout).Trim());
+
+                string lastLine = null;
+                foreach (var line in stdout.Split('\n'))
+                    if (line.Trim().Length > 0)
+                        lastLine = line.Trim();
+
+                string json = lastLine ?? "{}";
+                return new ForecastResult(
+                    ExtractJsonString(json, "window_start"),
+                    ExtractJsonString(json, "window_end"));
             }
-            sb.Append("forecast --start \"");
-            sb.Append(start);
-            sb.Append("\" --horizon ");
-            sb.Append(horizon);
-            if (_configPath != null)
+            finally
             {
-                sb.Append(" --config \"");
-                sb.Append(_configPath);
-                sb.Append('"');
+                if (tempDriverPath != null)
+                {
+                    try { File.Delete(tempDriverPath); } catch (IOException) { }
+                }
             }
+        }
 
-            var proc = Process.Start(new ProcessStartInfo(_exePath, sb.ToString())
+        private static string WriteTempDriverCsv(IDictionary<string, object[]> drivers)
+        {
+            if (!drivers.ContainsKey("datetime"))
+                throw new ArgumentException("drivers dict must include a 'datetime' column");
+
+            var names = new List<string>(drivers.Keys);
+            int n = drivers[names[0]].Length;
+            foreach (var name in names)
+                if (drivers[name].Length != n)
+                    throw new ArgumentException("all driver columns must have the same length");
+
+            string path = Path.Combine(Path.GetTempPath(), "rope_drivers_" + Guid.NewGuid().ToString("N") + ".csv");
+            using (var w = new StreamWriter(path, false, new UTF8Encoding(false)))
             {
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                UseShellExecute        = false,
-            });
-
-            string stdout = proc.StandardOutput.ReadToEnd();
-            string stderr = proc.StandardError.ReadToEnd();
-            proc.WaitForExit();
-
-            if (proc.ExitCode != 0)
-                throw new RopeException(6, (stderr.Length > 0 ? stderr : stdout).Trim());
-
-            string lastLine = null;
-            foreach (var line in stdout.Split('\n'))
-                if (line.Trim().Length > 0)
-                    lastLine = line.Trim();
-
-            string json = lastLine ?? "{}";
-            return new ForecastResult(
-                ExtractJsonString(json, "window_start"),
-                ExtractJsonString(json, "window_end"));
+                w.WriteLine(string.Join(",", names));
+                for (int i = 0; i < n; i++)
+                {
+                    var fields = new string[names.Count];
+                    for (int c = 0; c < names.Count; c++)
+                    {
+                        object v = drivers[names[c]][i];
+                        if (names[c] == "datetime" && v is DateTime dt)
+                            v = dt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss");
+                        fields[c] = Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture);
+                    }
+                    w.WriteLine(string.Join(",", fields));
+                }
+            }
+            return path;
         }
 
         // -------------------------------------------------------------------------
@@ -380,6 +463,104 @@ namespace RopeFramework
             for (int i = 0; i < times.Length; i++)
                 timesUnix[i] = ToUnix(times[i]);
             return GetBatch(timesUnix, lsts, lats, altsKm, mode);
+        }
+
+        // -------------------------------------------------------------------------
+        // Manifest introspection
+        // -------------------------------------------------------------------------
+
+        /// <summary>
+        /// Returns the model manifest summary: kind, latent_dim, grid, validated,
+        /// ic.{kind, axes}, and drivers.{source, columns: [{name, description}, ...]}.
+        /// Uses the fast native path, like Get()/GetBatch() -- this is read-only
+        /// manifest introspection, not a forecast run, so it never shells out to
+        /// the CLI subprocess.
+        /// </summary>
+        public Dictionary<string, object> GetModelInfo()
+        {
+            byte[] dirBytes = Encoding.UTF8.GetBytes(ExportedDir() + '\0');
+            byte* err = stackalloc byte[ErrBufLen];
+
+            int bufLen = 4096;
+            while (true)
+            {
+                byte[] buf = new byte[bufLen];
+                int rc;
+                fixed (byte* dirPtr = dirBytes, bufPtr = buf)
+                    rc = _ropeGetManifestInfo(dirPtr, bufPtr, bufLen, err, ErrBufLen);
+
+                if (rc == 0)
+                {
+                    int len = Array.IndexOf(buf, (byte)0);
+                    if (len < 0) len = buf.Length;
+                    string json = Encoding.UTF8.GetString(buf, 0, len);
+                    return (Dictionary<string, object>)MiniJson.Parse(json);
+                }
+                if (rc == 8) // ROPE_ERR_BUFFER_TOO_SMALL
+                {
+                    bufLen *= 4;
+                    continue;
+                }
+                throw new RopeException(rc, ReadErr(err));
+            }
+        }
+
+        /// <summary>Pretty-prints GetModelInfo() -- what this model expects, without
+        /// having to read model_manifest.json by hand.</summary>
+        public void PrintModel()
+        {
+            var info = GetModelInfo();
+            Console.WriteLine("Model kind:    " + info["kind"]);
+            Console.WriteLine("Latent dim:    " + info["latent_dim"]);
+            Console.WriteLine("Validated:     " + info["validated"]);
+            var grid = (Dictionary<string, object>)info["grid"];
+            Console.WriteLine("Grid:          " + grid["n_lst"] + " x " + grid["n_lat"] + " x " + grid["n_alt"] +
+                               "  (lat " + grid["lat_min_deg"] + ".." + grid["lat_max_deg"] +
+                               " deg, alt " + grid["alt_min_km"] + ".." + grid["alt_max_km"] + " km)");
+            var ic = (Dictionary<string, object>)info["ic"];
+            var axes = (List<object>)ic["axes"];
+            Console.WriteLine("IC:            kind=" + ic["kind"] + " axes=[" + string.Join(", ", axes) + "]");
+            var drivers = (Dictionary<string, object>)info["drivers"];
+            Console.WriteLine("Driver source: " + drivers["source"]);
+            Console.WriteLine("Driver columns (in order):");
+            foreach (var colObj in (List<object>)drivers["columns"])
+            {
+                var col = (Dictionary<string, object>)colObj;
+                Console.WriteLine("  " + col["name"] + "\t" + col["description"]);
+            }
+        }
+
+        private string ExportedDir()
+        {
+            if (_configPath == null)
+                throw new InvalidOperationException("configPath not set; cannot resolve exported_dir");
+
+            string section = null;
+            string value = null;
+            foreach (var rawLine in File.ReadAllLines(_configPath))
+            {
+                string line = rawLine.Trim();
+                if (line.Length == 0 || line.StartsWith("#") || line.StartsWith(";")) continue;
+                if (line.StartsWith("[") && line.EndsWith("]"))
+                {
+                    section = line.Substring(1, line.Length - 2).Trim();
+                    continue;
+                }
+                int eq = line.IndexOf('=');
+                if (eq < 0) continue;
+                string key = line.Substring(0, eq).Trim();
+                if (section == "paths" && key == "exported_dir")
+                {
+                    value = line.Substring(eq + 1).Trim();
+                    break;
+                }
+            }
+            if (value == null)
+                throw new InvalidOperationException("paths.exported_dir not set in " + _configPath);
+
+            if (!Path.IsPathRooted(value))
+                value = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(_configPath)), value);
+            return value;
         }
 
         // -------------------------------------------------------------------------
@@ -582,6 +763,123 @@ namespace RopeFramework
                 FreeLibrary(lib);
             else
                 s_dlCandidates[s_dlIndex].Close(lib);
+        }
+    }
+
+    // Minimal recursive-descent JSON parser -- no dependency on System.Text.Json
+    // (unavailable on net48 without a NuGet package, which this library
+    // deliberately has none of). Parses into Dictionary&lt;string, object&gt;,
+    // List&lt;object&gt;, string, double, bool, or null -- enough to walk
+    // rope_get_manifest_info's output in GetModelInfo()/PrintModel().
+    internal static class MiniJson
+    {
+        public static object Parse(string s)
+        {
+            int i = 0;
+            return ParseValue(s, ref i);
+        }
+
+        private static void SkipWs(string s, ref int i)
+        {
+            while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
+        }
+
+        private static object ParseValue(string s, ref int i)
+        {
+            SkipWs(s, ref i);
+            char c = s[i];
+            if (c == '{') return ParseObject(s, ref i);
+            if (c == '[') return ParseArray(s, ref i);
+            if (c == '"') return ParseString(s, ref i);
+            if (c == 't') { i += 4; return true; }
+            if (c == 'f') { i += 5; return false; }
+            if (c == 'n') { i += 4; return null; }
+            return ParseNumber(s, ref i);
+        }
+
+        private static Dictionary<string, object> ParseObject(string s, ref int i)
+        {
+            var dict = new Dictionary<string, object>();
+            i++; // {
+            SkipWs(s, ref i);
+            if (s[i] == '}') { i++; return dict; }
+            while (true)
+            {
+                SkipWs(s, ref i);
+                string key = ParseString(s, ref i);
+                SkipWs(s, ref i);
+                i++; // :
+                dict[key] = ParseValue(s, ref i);
+                SkipWs(s, ref i);
+                if (s[i] == ',') { i++; continue; }
+                i++; // }
+                break;
+            }
+            return dict;
+        }
+
+        private static List<object> ParseArray(string s, ref int i)
+        {
+            var list = new List<object>();
+            i++; // [
+            SkipWs(s, ref i);
+            if (s[i] == ']') { i++; return list; }
+            while (true)
+            {
+                list.Add(ParseValue(s, ref i));
+                SkipWs(s, ref i);
+                if (s[i] == ',') { i++; continue; }
+                i++; // ]
+                break;
+            }
+            return list;
+        }
+
+        private static string ParseString(string s, ref int i)
+        {
+            i++; // opening quote
+            var sb = new StringBuilder();
+            while (s[i] != '"')
+            {
+                if (s[i] == '\\')
+                {
+                    i++;
+                    switch (s[i])
+                    {
+                        case '"':  sb.Append('"');  break;
+                        case '\\': sb.Append('\\'); break;
+                        case '/':  sb.Append('/');  break;
+                        case 'n':  sb.Append('\n'); break;
+                        case 't':  sb.Append('\t'); break;
+                        case 'r':  sb.Append('\r'); break;
+                        case 'b':  sb.Append('\b'); break;
+                        case 'f':  sb.Append('\f'); break;
+                        case 'u':
+                            string hex = s.Substring(i + 1, 4);
+                            sb.Append((char)Convert.ToInt32(hex, 16));
+                            i += 4;
+                            break;
+                    }
+                    i++;
+                }
+                else
+                {
+                    sb.Append(s[i]);
+                    i++;
+                }
+            }
+            i++; // closing quote
+            return sb.ToString();
+        }
+
+        private static double ParseNumber(string s, ref int i)
+        {
+            int start = i;
+            while (i < s.Length &&
+                   (char.IsDigit(s[i]) || s[i] == '-' || s[i] == '+' || s[i] == '.' ||
+                    s[i] == 'e' || s[i] == 'E'))
+                i++;
+            return double.Parse(s.Substring(start, i - start), System.Globalization.CultureInfo.InvariantCulture);
         }
     }
 }

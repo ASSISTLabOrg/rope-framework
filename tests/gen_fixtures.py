@@ -115,7 +115,7 @@ datetime,f10,kp
 2024-01-01T02:00:00,150.0,2.0
 """
 
-IC_HEADER = "F10,Kp," + ",".join(f"y{i+1}" for i in range(K))
+IC_HEADER = "f10,kp," + ",".join(f"y{i+1}" for i in range(K))
 IC_ZEROS  = ",".join(["0.0"] * K)
 IC_CSV    = IC_HEADER + "\n"
 for f10 in [100.0, 200.0]:
@@ -299,13 +299,26 @@ if IS_CUSTOM:
         "kind": "stacked_ensemble",
         "runtime_requirements": runtime_reqs,
         "latent_dim": K,
-        "driver_columns": ["f10", "kp", "t1", "t2", "t3", "t4"],
-        "driver_source": "celestrak_sw",
+        "drivers": {
+            "source": "celestrak_sw",
+            "columns": [
+                {"name": "f10", "description": "F10.7 cm solar radio flux (SFU)."},
+                {"name": "kp", "description": "Kp planetary geomagnetic index (0-9 scale)."},
+                {"name": "t1", "description": "sin(2*pi*hour/24) - diurnal phase harmonic."},
+                {"name": "t2", "description": "cos(2*pi*hour/24) - diurnal phase harmonic."},
+                {"name": "t3", "description": "sin(2*pi*day_of_year/365.25) - annual phase harmonic."},
+                {"name": "t4", "description": "cos(2*pi*day_of_year/365.25) - annual phase harmonic."},
+            ],
+        },
         "validated": False,
         "grid": {
             "n_lst": GRID_LST, "n_lat": GRID_LAT, "n_alt": GRID_ALT,
             "lat_min_deg": -87.5, "lat_max_deg": 87.5,
             "alt_min_km": 100.0, "alt_max_km": 980.0,
+        },
+        "ic": {
+            "kind": "ic_lookup_table",
+            "params": {"grid_axes": ["f10", "kp"], "file": "ic_table.icbin"},
         },
         "stacked_ensemble": {
             "seq_len": S,
@@ -313,10 +326,6 @@ if IS_CUSTOM:
             "base_models": base_models,
             "meta_model": {"file": "meta_model.onnx", "backend": "onnx"},
             "decoders": decoders,
-            "ic": {
-                "kind": "ic_lookup_table",
-                "params": {"grid_axes": ["f10", "kp"], "file": "ic_table.icbin"},
-            },
         },
     }
     print("Writing model_manifest.json …")

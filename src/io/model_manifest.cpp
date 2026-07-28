@@ -78,21 +78,36 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
         throw std::runtime_error(
             "ModelManifest::load: 'latent_dim' must be positive in " + ps);
 
-    // driver_columns
-    if (!j.contains("driver_columns") || !j["driver_columns"].is_array())
-        throw std::runtime_error(missing_field("driver_columns", ps));
-    m.driver_columns = j["driver_columns"].get<std::vector<std::string>>();
-    if (m.driver_columns.empty())
-        throw std::runtime_error(
-            "ModelManifest::load: 'driver_columns' must not be empty in " + ps);
+    // drivers
+    if (!j.contains("drivers") || !j["drivers"].is_object())
+        throw std::runtime_error(missing_field("drivers", ps));
+    const auto& jdrv = j["drivers"];
 
-    // driver_source
-    if (!j.contains("driver_source") || !j["driver_source"].is_string())
-        throw std::runtime_error(missing_field("driver_source", ps));
-    m.driver_source = j["driver_source"].get<std::string>();
+    if (!jdrv.contains("source") || !jdrv["source"].is_string())
+        throw std::runtime_error(missing_field("drivers.source", ps));
+    m.driver_source = jdrv["source"].get<std::string>();
     if (m.driver_source.empty())
         throw std::runtime_error(
-            "ModelManifest::load: 'driver_source' must not be empty in " + ps);
+            "ModelManifest::load: 'drivers.source' must not be empty in " + ps);
+
+    if (!jdrv.contains("columns") || !jdrv["columns"].is_array() || jdrv["columns"].empty())
+        throw std::runtime_error(missing_field("drivers.columns", ps));
+    for (const auto& jc : jdrv["columns"]) {
+        if (!jc.contains("name") || !jc["name"].is_string() || jc["name"].get<std::string>().empty())
+            throw std::runtime_error(
+                "ModelManifest::load: drivers.columns entry missing 'name' in " + ps);
+        if (!jc.contains("description") || !jc["description"].is_string() ||
+                jc["description"].get<std::string>().empty())
+            throw std::runtime_error(
+                "ModelManifest::load: drivers.columns entry missing 'description' in " + ps);
+        DriverColumnInfo info{jc["name"].get<std::string>(), jc["description"].get<std::string>()};
+        m.driver_columns.push_back(info.name);
+        m.driver_column_info.push_back(std::move(info));
+    }
+
+    // validated (lenient — defaults to false if absent)
+    if (j.contains("validated") && j["validated"].is_boolean())
+        m.validated = j["validated"].get<bool>();
 
     // grid — kind-agnostic physical shape of this model's output grid.
     if (!j.contains("grid") || !j["grid"].is_object())
@@ -142,9 +157,11 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
     if (!jic_params.contains("grid_axes") || !jic_params["grid_axes"].is_array())
         throw std::runtime_error(missing_field("ic.params.grid_axes", ps));
     m.ic_grid_axes = jic_params["grid_axes"].get<std::vector<std::string>>();
-    if (m.ic_grid_axes.empty())
+    if (m.ic_grid_axes.size() != 2)
         throw std::runtime_error(
-            "ModelManifest::load: 'ic_grid_axes' must not be empty in " + ps);
+            "ModelManifest::load: 'ic.params.grid_axes' must have exactly 2 entries "
+            "(ic_lookup_table is a 2D interpolator), got " +
+            std::to_string(m.ic_grid_axes.size()) + " in " + ps);
 
     // Kind-specific block
     if (!j.contains("stacked_ensemble") || !j["stacked_ensemble"].is_object())
@@ -274,6 +291,28 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
     }
 
     return m;
+}
+
+std::string ModelManifest::to_summary_json() const {
+    nlohmann::json j;
+    j["kind"]       = kind;
+    j["latent_dim"] = latent_dim;
+    j["validated"]  = validated;
+    j["grid"] = {
+        {"n_lst", grid.n_lst}, {"n_lat", grid.n_lat}, {"n_alt", grid.n_alt},
+        {"lat_min_deg", grid.lat_min_deg}, {"lat_max_deg", grid.lat_max_deg},
+        {"alt_min_km", grid.alt_min_km}, {"alt_max_km", grid.alt_max_km}
+    };
+    j["ic"] = {
+        {"kind", ic_kind},
+        {"axes", ic_grid_axes}
+    };
+    j["drivers"]["source"] = driver_source;
+    auto& jcols = j["drivers"]["columns"] = nlohmann::json::array();
+    for (const auto& col : driver_column_info)
+        jcols.push_back({{"name", col.name}, {"description", col.description}});
+
+    return j.dump();
 }
 
 } // namespace rope::io

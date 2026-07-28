@@ -348,8 +348,7 @@ void DriverCacheManager::convert_and_write(const std::string& raw_csv,
     const double x_max = xf.back();
 
     std::vector<TimePoint>  times;
-    std::vector<float>      f10v, kpv, doyv;
-    std::vector<int>        hourv;
+    std::vector<float>      f10v, kpv;
 
     for (double xh = std::ceil(x_min); xh <= x_max; xh += 1.0) {
         TimePoint tp = static_cast<TimePoint>(std::llround(xh * 3600.0));
@@ -365,24 +364,20 @@ void DriverCacheManager::convert_and_write(const std::string& raw_csv,
         double kp_val = it->second[h] / 10.0;  // divide raw tenths by 10
         if (!std::isfinite(kp_val)) continue;
 
-        int int_doy, yr;
-        rope::unpack(tp, h, int_doy, yr);
-        float cont_doy = static_cast<float>(int_doy) + h / 24.0f;
-
         times.push_back(tp);
         f10v.push_back(static_cast<float>(f107_val));
         kpv.push_back(static_cast<float>(kp_val));
-        doyv.push_back(cont_doy);
-        hourv.push_back(h);
     }
 
     if (times.empty())
         throw std::runtime_error(
             "convert_and_write: no output rows after merging F10.7 and Kp");
 
-    // 5. Write .swbin directly (magic RPSW, matches driver_bin.h format).
-    //    Header (16 bytes): magic uint32, version uint32, nrows uint32, reserved uint32
-    //    Records (24 bytes): tp int64, f10 float32, kp float32, doy float32, hour_int int32
+    // 5. Write .swbin directly (magic RPSW, matches driver_bin.h v2 format).
+    //    Header (16 bytes): magic uint32, version uint32, nrows uint32, ncols uint32
+    //    Name table (2 entries): "f10", "kp" (doy/hour_int are derived from tp
+    //    on read and never need to be stored — see DriverRow::get()).
+    //    Records: tp int64, then ncols float32 values in name-table order.
     std::error_code ec;
     fs::create_directories(dest.parent_path(), ec);
 
@@ -391,22 +386,25 @@ void DriverCacheManager::convert_and_write(const std::string& raw_csv,
         "convert_and_write: cannot write " + dest.string());
 
     const std::uint32_t magic   = 0x52505357u;
-    const std::uint32_t version = 1u;
+    const std::uint32_t version = 2u;
     const std::uint32_t nrows   = static_cast<std::uint32_t>(times.size());
-    const std::uint32_t zero    = 0u;
+    const std::uint32_t ncols   = 2u;
     f.write(reinterpret_cast<const char*>(&magic),   4);
     f.write(reinterpret_cast<const char*>(&version), 4);
     f.write(reinterpret_cast<const char*>(&nrows),   4);
-    f.write(reinterpret_cast<const char*>(&zero),    4);
+    f.write(reinterpret_cast<const char*>(&ncols),   4);
+
+    for (const std::string& name : {std::string("f10"), std::string("kp")}) {
+        const auto name_len = static_cast<std::uint32_t>(name.size());
+        f.write(reinterpret_cast<const char*>(&name_len), 4);
+        f.write(name.data(), static_cast<std::streamsize>(name_len));
+    }
 
     for (std::uint32_t i = 0; i < nrows; ++i) {
-        auto         tp_raw  = static_cast<std::int64_t>(times[i]);
-        std::int32_t hour_i  = static_cast<std::int32_t>(hourv[i]);
+        auto tp_raw = static_cast<std::int64_t>(times[i]);
         f.write(reinterpret_cast<const char*>(&tp_raw),  8);
         f.write(reinterpret_cast<const char*>(&f10v[i]), 4);
         f.write(reinterpret_cast<const char*>(&kpv[i]),  4);
-        f.write(reinterpret_cast<const char*>(&doyv[i]), 4);
-        f.write(reinterpret_cast<const char*>(&hour_i),  4);
     }
     if (!f) throw std::runtime_error(
         "convert_and_write: write failed for " + dest.string());
