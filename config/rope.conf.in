@@ -4,15 +4,30 @@
 # Use absolute paths if you need to point outside the package tree.
 
 # ---------------------------------------------------------------------------
+[forecast]
+# ---------------------------------------------------------------------------
+
+# Set to false to skip the uncertainty calculation
+compute_uncertainty = true
+
+# Bounds peak memory during decode
+# <= 0 = whole horizon
+decode_chunk_hours = 72
+
+# Caps decoder batch size; lowers peak memory at the cost of more decoder calls
+# <= 0 = use the model's own value
+decode_batch_size = 0
+
+# ---------------------------------------------------------------------------
 [paths]
 # ---------------------------------------------------------------------------
 
 # Model directory
-exported_dir = ../data/models/tiegcm-aurora-v1
+exported_dir = ../data/models/wam-borealis-v1
 
 # Explicit driver data file (.swbin or .csv). Comment out to use automated driver caching.
-driver_path = ../data/drivers/sw_celestrack_1957.swbin
-
+# Manual CSV files need to be in the same format as ../data/drivers/sw_drivers.csv
+# driver_path = ../data/drivers/sw_drivers.swbin
 
 # ---------------------------------------------------------------------------
 [driver_cache]
@@ -54,19 +69,3 @@ intra_threads_decoder = 0
 # device = cuda      Run decoder on the first available GPU
 # device = cuda:0    Explicit GPU index
 device = @ROPE_DECODER_DEVICE@
-
-
-# ---------------------------------------------------------------------------
-[forecast]
-# ---------------------------------------------------------------------------
-
-# Set to false to skip the uncertainty calculation
-compute_uncertainty = true
-
-# Bounds peak memory during decode
-# <= 0 = whole horizon
-decode_chunk_hours = 72
-
-# Caps decoder batch size; lowers peak memory at the cost of more decoder calls
-# <= 0 = use the model's own value
-decode_batch_size = 0

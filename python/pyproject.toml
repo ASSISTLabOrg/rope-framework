@@ -19,3 +19,4 @@ py-modules = ["rope"]
 # Tags of the form v0.2.0 are normalised to 0.2.0 automatically.
 # fallback_version is used when building outside a git checkout (e.g. from a sdist).
 fallback_version = "0.0.0"
+

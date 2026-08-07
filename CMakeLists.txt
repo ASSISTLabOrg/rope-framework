@@ -58,8 +58,8 @@ FetchContent_Declare(
 )
 FetchContent_Declare(
     rope_registry
-    URL      https://github.com/AssistLabOrg/rope-registry/archive/refs/tags/v0.3.tar.gz
-    URL_HASH SHA256=db2b6cb37ecb62e1724bec23d9142f7e7cc7510e84d4959256e6dd5ca04ed352
+    URL      https://github.com/AssistLabOrg/rope-registry/archive/refs/tags/v0.4.tar.gz
+    URL_HASH SHA256=337b5d09bf168c76830fdc82b5e9a647fcf476b8e72524c1e8b0d39c1539d6c8
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(nlohmann_json CLI11 rope_registry)

@@ -24,7 +24,7 @@ Defined in `include/rope/io/driver_db.h`. Represents one hour of driver data:
 `DriverRow::get(name)` is the one place that resolves a driver name to a value:
 1. `t1`–`t4` → the fields above, unconditionally.
 2. Otherwise, linear-scan `raw` for `name`.
-3. If still unresolved and `name` is `doy` or `hour_int` → derived from `tp` as a fallback (these two are "raw-if-present, else-derived" — read from the source when the source has them, computed otherwise; this is the one existing behavior this generalization preserves exactly).
+3. If still unresolved and `name` is `doy`, `hour_int`, or `f10_41day_avg` → derived as a fallback: `doy`/`hour_int` from `tp`, `f10_41day_avg` via the trailing-984h average over raw `f10` history. These three are "raw-if-present, else-derived" — read from the source when the source has them (step 2 already returns it in that case), computed otherwise.
 4. Otherwise → throws. Never substitutes a value.
 
 `f10`/`kp` are **not** privileged in any way at this layer — they're just whatever names happen to be in a given model's raw data. A future model with an entirely different, differently-sized driver set (no overlap with `f10`/`kp` at all) works the same way.
@@ -45,7 +45,7 @@ raw_data_  : vector<vector<float>>      // raw_data_[j][i] = raw_names_[j]'s val
 ```
 
 **Loading:**
-- `SpaceWeatherDB(csv_path)` — parses a CSV with a required `datetime` column plus *any* other columns present (via `CsvReader::column_names()`, which is already name-keyed and order-independent — column order in the file never matters). Rejects `t1`/`t2`/`t3`/`t4` as literal headers (reserved). `doy`/`hour_int` are backfilled from the timestamp only when genuinely absent from the file.
+- `SpaceWeatherDB(csv_path)` — parses a CSV with a required `datetime` column plus *any* other columns present (via `CsvReader::column_names()`, which is already name-keyed and order-independent — column order in the file never matters). Rejects `t1`/`t2`/`t3`/`t4` as literal headers (reserved). `doy`/`hour_int`/`f10_41day_avg` are backfilled/computed only when genuinely absent from the file — present-if-supplied, else derived (`f10_41day_avg` from trailing `f10` history).
 - `SpaceWeatherBin::load(bin_path)` → `SpaceWeatherDB` — reads `.swbin` (v2, self-describing) directly into the same generic column store.
 - `SpaceWeatherDB::from_file(path)` — dispatches on `.swbin` extension vs. CSV.
 

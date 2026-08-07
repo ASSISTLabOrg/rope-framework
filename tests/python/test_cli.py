@@ -110,6 +110,36 @@ def test_forecast_returns_ok(forecast_cache):
     assert "window_end"   in data
 
 
+def test_forecast_driver_override_accepts_shuffled_columns(tmp_path):
+    """--driver points at an explicit CSV with columns in a different order
+    than the model's manifest declares -- column lookup is by name, not
+    position, so this must still succeed.
+    """
+    conf = tmp_path / "rope.conf"
+    _write_conf(conf)
+    cache = str(tmp_path / "forecast_grid.bin")
+
+    driver_csv = tmp_path / "shuffled_drivers.csv"
+    driver_csv.write_text(
+        "kp,datetime,f10\n"
+        "2.0,2023-12-31T22:00:00,150.0\n"
+        "2.0,2023-12-31T23:00:00,150.0\n"
+        "2.0,2024-01-01T00:00:00,150.0\n"
+        "2.0,2024-01-01T01:00:00,150.0\n"
+        "2.0,2024-01-01T02:00:00,150.0\n"
+        "2.0,2024-01-01T03:00:00,150.0\n"
+    )
+
+    result = _rope(
+        "--cache-path", cache, "forecast",
+        "--start", FORECAST_START, "--horizon", str(FORECAST_HORIZON),
+        "--config", str(conf), "--driver", str(driver_csv),
+    )
+    assert result.returncode == 0, f"forecast with --driver failed:\n{result.stderr}"
+    data = json.loads(result.stdout.strip().splitlines()[-1])
+    assert data["status"] == "ok"
+
+
 def test_rope_binding_forecast_uses_custom_cache_path(tmp_path):
     """Regression test: Rope.forecast() must pass --cache-path when a custom
     cache_path is configured -- otherwise it silently falls back to the
@@ -137,6 +167,113 @@ def test_rope_binding_forecast_uses_custom_cache_path(tmp_path):
         "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
     )
     assert probe.returncode == 0
+
+
+def test_rope_binding_forecast_with_explicit_drivers(tmp_path):
+    """Rope.forecast(drivers=...) writes a temp CSV and passes --driver,
+    overriding paths.driver_path for this call only (all-or-nothing: the
+    dict must cover the full history+horizon window itself)."""
+    sys.path.insert(0, str(_project_root / "python"))
+    from rope import Rope
+
+    conf = tmp_path / "rope_binding.conf"
+    _write_conf(conf)
+    cache = str(tmp_path / "explicit_drivers_forecast_grid.bin")
+
+    r = Rope(lib_path=Path(ROPE_LIB), exe_path=Path(ROPE_EXE), cache_path=cache, config_path=conf)
+    result = r.forecast(
+        FORECAST_START, FORECAST_HORIZON,
+        drivers={
+            "datetime": [
+                "2023-12-31T22:00:00", "2023-12-31T23:00:00",
+                "2024-01-01T00:00:00", "2024-01-01T01:00:00",
+                "2024-01-01T02:00:00", "2024-01-01T03:00:00",
+            ],
+            "kp":  [2.0] * 6,
+            "f10": [150.0] * 6,
+        },
+    )
+    assert result["status"] == "ok"
+
+
+def test_rope_binding_forecast_with_explicit_drivers_f10_41day_avg(tmp_path):
+    """drivers=... may supply 'f10_41day_avg' directly like any other raw
+    column -- it is no longer a reserved, always-derived name."""
+    sys.path.insert(0, str(_project_root / "python"))
+    from rope import Rope
+
+    conf = tmp_path / "rope_binding.conf"
+    _write_conf(conf)
+    cache = str(tmp_path / "f10_41day_avg_forecast_grid.bin")
+
+    r = Rope(lib_path=Path(ROPE_LIB), exe_path=Path(ROPE_EXE), cache_path=cache, config_path=conf)
+    result = r.forecast(
+        FORECAST_START, FORECAST_HORIZON,
+        drivers={
+            "datetime": [
+                "2023-12-31T22:00:00", "2023-12-31T23:00:00",
+                "2024-01-01T00:00:00", "2024-01-01T01:00:00",
+                "2024-01-01T02:00:00", "2024-01-01T03:00:00",
+            ],
+            "kp":            [2.0] * 6,
+            "f10":           [150.0] * 6,
+            "f10_41day_avg": [148.5] * 6,
+        },
+    )
+    assert result["status"] == "ok"
+
+
+def test_rope_binding_get_model_info(tmp_path):
+    sys.path.insert(0, str(_project_root / "python"))
+    from rope import Rope
+
+    conf = tmp_path / "rope_binding.conf"
+    _write_conf(conf)
+
+    r = Rope(lib_path=Path(ROPE_LIB), exe_path=Path(ROPE_EXE), config_path=conf)
+    info = r.get_model_info()
+    assert info["kind"] == "stacked_ensemble"
+    assert info["drivers"]["source"] == "celestrak_sw"
+    names = [c["name"] for c in info["drivers"]["columns"]]
+    assert names == ["f10", "kp", "t1", "t2", "t3", "t4"]
+    assert info["ic"]["axes"] == ["f10", "kp"]
+
+
+def test_rope_binding_print_model_smoke(tmp_path, capsys):
+    sys.path.insert(0, str(_project_root / "python"))
+    from rope import Rope
+
+    conf = tmp_path / "rope_binding.conf"
+    _write_conf(conf)
+
+    r = Rope(lib_path=Path(ROPE_LIB), exe_path=Path(ROPE_EXE), config_path=conf)
+    r.print_model()
+    out = capsys.readouterr().out
+    assert "Model kind:" in out
+    assert "f10" in out
+
+
+# ---------------------------------------------------------------------------
+# manifest
+# ---------------------------------------------------------------------------
+
+def test_manifest_prints_driver_columns(forecast_cache):
+    result = _rope("manifest", "--config", forecast_cache.conf)
+    assert result.returncode == 0
+    assert "Driver columns" in result.stdout
+    assert "f10" in result.stdout
+    assert "kp" in result.stdout
+
+
+def test_manifest_json_is_well_formed(forecast_cache):
+    result = _rope("manifest", "--config", forecast_cache.conf, "--json")
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    assert data["kind"] == "stacked_ensemble"
+    assert data["drivers"]["source"] == "celestrak_sw"
+    names = [c["name"] for c in data["drivers"]["columns"]]
+    assert names == ["f10", "kp", "t1", "t2", "t3", "t4"]
+    assert data["ic"]["axes"] == ["f10", "kp"]
 
 
 # ---------------------------------------------------------------------------

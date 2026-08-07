@@ -4,11 +4,12 @@ ROPE is a tool for forecasting upper-atmosphere density. Given a start time and 
 
 ## Notices
 
-This is a beta release of the ROPE tool. It is not recommended for use in production until the full version is released. Breaking changes to the public API may be introduced during the beta testing phase.
+Beta release — not recommended for production. Breaking API changes may land before the full release.
 
 ## Contact Info
 
-Contact [Violet Player](mailto:violet.player@noaa.gov) or [Piyush Mehta](mailto:piyush.mehta@mail.wvu.edu) with any questions. Technical support questions should be directed to [Violet Player](mailto:violet.player@noaa.gov).
+Questions: [Violet Player](mailto:violet.player@noaa.gov) or [Piyush Mehta](mailto:piyush.mehta@mail.wvu.edu).
+Technical support: [Violet Player](mailto:violet.player@noaa.gov).
 
 ## Requirements
 
@@ -52,9 +53,7 @@ Once in place the directory structure should look like the layout above.
 
 ## Configuration
 
-The default config file is `config/rope.conf`. It is pre-configured to match the standard layout, so in most cases nothing needs to be changed.
-
-If you need to change paths or thread counts, open the file in a text editor. The settings are documented with comments inside it.
+Default config file: `config/rope.conf`, pre-configured for the standard layout — usually nothing to change. Paths, thread counts, and other settings are documented with comments inside the file.
 
 The one setting you may want to change is `decoder.device`:
 
@@ -63,7 +62,7 @@ The one setting you may want to change is `decoder.device`:
 device = cpu    # or: cuda, cuda:0, cuda:1
 ```
 
-This only has an effect on builds that include the LibTorch backend (the CPU and CUDA 12 Linux builds, and the macOS build).
+Only affects CPU builds (Linux, macOS, Windows) — the CUDA 12 builds (Linux, Windows) use ONNX Runtime's CUDA backend for the decoder and ignore this setting.
 
 ## Command Line Interface
 
@@ -112,11 +111,21 @@ To query many points at once, prepare a CSV file with the columns `YYYY,MM,DD,HH
 rope get --mode interp --file queries.csv --output results.csv
 ```
 
+### 3. Inspect the model manifest
+
+```
+rope manifest
+```
+
+Prints the model's driver columns, grid shape, and validation status. Add `--json` for machine-readable output.
+
 ### Use a non-default config
 
 ```
 rope forecast --config /path/to/rope.conf --start "2024-06-01 00:00:00" --horizon 24
 ```
+
+`--config` is also accepted by `rope manifest`.
 
 ### Export as Zarr
 
@@ -124,7 +133,7 @@ rope forecast --config /path/to/rope.conf --start "2024-06-01 00:00:00" --horizo
 rope forecast --start "2024-06-01 00:00:00" --horizon 24 --zarr /path/to/output_dir
 ```
 
-`--zarr` names a container directory; the store lands at `<path>/forecast_<start>_H<horizon>/`. Read it with `xarray.open_dataset(path, engine="zarr")`.
+`--zarr` names a container directory; the store lands at `<path>/forecast_<start>_H<horizon+1>/`. Read it with `xarray.open_dataset(path, engine="zarr")`.
 
 ## Python
 
@@ -144,9 +153,8 @@ r = Rope(
 )
 ```
 
-The constructor parameters are all optional. When omitted, `rope.py` resolves them relative to the directory one level above its own location (the archive root).
-
-To override the decoder device (e.g. to switch between CPU and GPU) without editing `rope.conf`, pass `device="cuda"`. The wrapper writes a temporary config with that setting and passes it to the forecast subprocess.
+- Constructor parameters are all optional; when omitted, `rope.py` resolves them relative to the directory one level above its own location (the archive root).
+- To override the decoder device (e.g. CPU ↔ GPU) without editing `rope.conf`, pass `device="cuda"` — the wrapper writes a temporary config with that setting for the forecast subprocess.
 
 ### Example
 
@@ -201,13 +209,15 @@ The `with` block calls `open()` on entry and `close()` on exit. `shutdown()` is 
 | Member | Description |
 |--------|-------------|
 | `Rope(lib_path, exe_path, cache_path, config_path, device)` | Constructor — all parameters optional |
-| `forecast(start, horizon)` → `dict` | Run a forecast; returns `{"status", "window_start", "window_end"}` |
+| `forecast(start, horizon, drivers=None)` → `dict` | Run a forecast; returns `{"status", "window_start", "window_end"}`. `drivers` supplies driver data inline for this call only, overriding `paths.driver_path`/`manifest.drivers.source` |
 | `open()` | Memory-map the cached grid and open an interpolation handle |
 | `close()` | Release the handle (unmaps the cache file) |
 | `refresh()` | Re-map the cache file after a new forecast |
 | `get(time, lst, lat, alt_km, mode)` → `dict` | Single-point query; returns `{"density", "uncertainty"}` in kg/m³ |
 | `get_density(time, lst, lat, alt_km, mode)` → `float` | Single-point density only; faster for tight loops |
 | `get_batch(times, lsts, lats, alts_km, mode)` → `list[dict]` | N-point query; returns list of `{"density", "uncertainty"}` |
+| `get_model_info()` → `dict` | Model manifest summary: `kind`, `latent_dim`, `grid`, `validated`, `ic`, `drivers` |
+| `print_model()` | Pretty-print `get_model_info()` |
 | `shutdown()` | Alias for `close()` |
 | `device` | Property: active decoder device string |
 
@@ -243,6 +253,11 @@ int rope_query_batch(rope_interp_t* interp, int mode, int n,
 
 /* Release the handle (unmaps the cache file). Safe to call with NULL. */
 void rope_close(rope_interp_t* interp);
+
+/* Writes a JSON summary of the model manifest into buf (kind, latent_dim, grid,
+ * validated, ic, drivers) without needing an open handle or a cached forecast. */
+int rope_get_manifest_info(const char* exported_dir, char* buf, int buf_len,
+                           char* err_buf, int err_len);
 ```
 
 **Mode constants:** `ROPE_HOLD` (0) — snap to nearest model hour; `ROPE_INTERP` (1) — interpolate in time.
@@ -258,6 +273,7 @@ void rope_close(rope_interp_t* interp);
 | `ROPE_ERR_BAD_ARG` | 5 | Invalid argument (NULL pointer, etc.) |
 | `ROPE_ERR_INTERNAL` | 6 | Unexpected internal failure |
 | `ROPE_ERR_CACHE_CORRUPT` | 7 | Cache file exists but is corrupt or from an incompatible build |
+| `ROPE_ERR_BUFFER_TOO_SMALL` | 8 | Caller-supplied buffer too small for the output; `err_buf` gives the required size |
 
 ### Example
 
@@ -311,25 +327,21 @@ Interpolation queries call `librope` in-process; forecasts run via the `rope` CL
 
 ### Setup
 
-`RopeFramework` isn't on nuget.org — install the downloaded `.nupkg` as a local package source instead; this is the expected way to consume the binding.
+`RopeFramework` isn't on nuget.org — install the downloaded `.nupkg` as a local package source.
 
-Download `RopeFramework.<version>.nupkg` from the GitHub Releases page, then either add it via the NuGet Package Manager (Visual Studio: Tools → NuGet Package Manager → Package Sources → add the folder, then install `RopeFramework` as usual) or from the CLI (works for both PackageReference and packages.config projects):
+1. Download `RopeFramework.<version>.nupkg` from the GitHub Releases page.
+2. Install it as a local source:
+   - **Visual Studio:** Tools → NuGet Package Manager → Package Sources → add the folder → install `RopeFramework` as usual.
+   - **CLI** (works for both PackageReference and packages.config projects): `dotnet add package RopeFramework --source /path/to/folder`
 
-```
-dotnet add package RopeFramework --source /path/to/folder
-```
+Native binaries are bundled in the package and copied next to your build output automatically — no extra setup needed.
 
-Either way, native binaries are bundled in the package and copied next to your build output automatically — no extra setup needed.
-
-Alternatively, reference the project directly or copy `Rope.cs` into your project:
+**Alternative:** reference the project directly, or copy `Rope.cs` into your project. Either way requires `AllowUnsafeBlocks`:
 
 ```xml
 <ItemGroup>
   <ProjectReference Include="path/to/dotnet/Rope.csproj" />
 </ItemGroup>
-```
-
-```xml
 <PropertyGroup>
   <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 </PropertyGroup>
@@ -382,6 +394,7 @@ r.Dispose();
 | `Rope(libPath, exePath, cachePath, configPath)` | Constructor — all parameters optional; defaults derived from package layout |
 | `Forecast(string start, int horizon)` | Run a forecast; returns `ForecastResult` with `WindowStart` / `WindowEnd` |
 | `Forecast(DateTime start, int horizon)` | DateTime overload |
+| `Forecast(..., IDictionary<string,object[]> drivers)` | Overload (string or DateTime start) that supplies driver data inline for this call only, overriding `paths.driver_path`/`manifest.drivers.source` |
 | `Open()` | Memory-map the cached grid and open an interpolation handle |
 | `Close()` | Release the handle (unmaps the cache file) |
 | `Refresh()` | Re-map the cache file after a new forecast |
@@ -389,6 +402,8 @@ r.Dispose();
 | `Get(DateTime time, ...)` | DateTime overload |
 | `GetBatch(double[] timesUnix, ...)` | Batch query; returns `QueryResult[]` |
 | `GetBatch(DateTime[] times, ...)` | DateTime overload |
+| `GetModelInfo()` → `Dictionary<string, object>` | Model manifest summary: kind, latent_dim, grid, validated, ic, drivers |
+| `PrintModel()` | Pretty-print `GetModelInfo()` |
 | `Shutdown()` | Alias for `Close()` |
 | `Dispose()` | Close the handle and unload the library |
 
@@ -398,9 +413,9 @@ Errors are reported as `RopeException` with a `Code` property matching the `ROPE
 
 ## Demo
 
-The `demo/` directory contains a Jupyter notebook that benchmarks ROPE against NRLMSIS-2.1 atmospheric drag across two scenarios: forecast and interpolation throughput (24-hour forecast, 10,000 random point queries), and a 1-day ISS-like orbit integration comparing altitude decay between the two models.
+The `demo/` directory contains a Jupyter notebook that benchmarks ROPE against NRLMSIS-2.1 atmospheric drag across two scenarios: forecast and interpolation throughput (10,000 random point queries), and a 1-day ISS-like orbit integration comparing altitude decay between the two models.
 
-Running the demo scrips is **not** required to use any of the rope library, but may be beneficial as a sanity check to ensure your system is functioning.
+Running the demo scripts is **not** required to use any of the rope library, but may be beneficial as a sanity check to ensure your system is functioning.
 
 To set it up, install the demo dependencies from the archive root:
 

@@ -9,6 +9,7 @@
 #include "rope/io/driver_bin.h"
 #include "rope/io/driver_cache.h"
 #include "rope/core/platform.h"
+#include "rope/core/text.h"
 
 #include <algorithm>
 #include <cmath>
@@ -108,6 +109,12 @@ StackedEnsemblePipeline::StackedEnsemblePipeline(
 // Constructor helpers
 // ---------------------------------------------------------------------------
 
+// True if both name lists match pairwise, ignoring ASCII case.
+static bool axis_names_match(const std::vector<std::string>& a, const std::vector<std::string>& b) {
+    return a.size() == b.size() &&
+           std::equal(a.begin(), a.end(), b.begin(), rope::core::iequals_ascii);
+}
+
 void StackedEnsemblePipeline::load_ic_source(
     const io::ModelManifest& manifest, const fs::path& dir)
 {
@@ -118,7 +125,7 @@ void StackedEnsemblePipeline::load_ic_source(
             "StackedEnsemblePipeline: manifest latent_dim=" +
             std::to_string(K_) + " does not match IC source latent_dim=" +
             std::to_string(ic_source_->latent_dim()));
-    if (ic_source_->axis_names() != manifest.ic_grid_axes)
+    if (!axis_names_match(ic_source_->axis_names(), manifest.ic_grid_axes))
         throw std::runtime_error(
             "StackedEnsemblePipeline: IC source axes " + join(ic_source_->axis_names()) +
             " do not match manifest ic.params.grid_axes " + join(manifest.ic_grid_axes));

@@ -202,7 +202,10 @@ class Rope:
         drivers : Optional explicit driver data, e.g.
                       {"datetime": [...], "f10": [...], "kp": [...]}
                   overriding paths.driver_path/manifest.drivers.source for this
-                  call only. Must cover the full contiguous hourly window the
+                  call only. Any raw column name is accepted, including
+                  "f10_41day_avg" -- supplied directly it's used as-is;
+                  omitted, it falls back to being computed from "f10" history.
+                  Must cover the full contiguous hourly window the
                   model needs (history + horizon) — same requirement as an
                   explicit driver_path CSV, just supplied inline. All-or-nothing:
                   a column the model needs but this dict omits is not backfilled

@@ -76,6 +76,93 @@ TEST_CASE("SpaceWeatherDB: a raw CSV column literally named t1-t4 throws") {
     REQUIRE_THROWS_AS(rope::io::SpaceWeatherDB::from_file(path), std::runtime_error);
 }
 
+TEST_CASE("SpaceWeatherDB: f10_41day_avg averages the trailing window (fewer rows near coverage start)") {
+    // 10 hourly rows, f10 = 100, 101, ..., 109. Window is 984h, so every row here
+    // is a "partial window" case -- average of all rows from the start through idx.
+    auto path = fs::temp_directory_path() / "rope_test_driver_db_f10avg.csv";
+    std::ofstream f(path);
+    f << "datetime,f10\n";
+    for (int i = 0; i < 10; ++i)
+        f << "2024-01-01T" << (i < 10 ? "0" : "") << i << ":00:00," << (100.0 + i) << "\n";
+    f.close();
+
+    auto db = rope::io::SpaceWeatherDB::from_file(path);
+
+    // idx 0: avg of just [100] = 100.
+    auto row0 = db.lookup(rope::parse_datetime("2024-01-01T00:00:00"));
+    CHECK_THAT(row0.get("f10_41day_avg"), WithinAbs(100.0f, 1e-4f));
+
+    // idx 9 (last row): avg of [100..109] = 104.5.
+    auto row9 = db.lookup(rope::parse_datetime("2024-01-01T09:00:00"));
+    CHECK_THAT(row9.get("f10_41day_avg"), WithinAbs(104.5f, 1e-4f));
+}
+
+TEST_CASE("SpaceWeatherDB: f10_41day_avg window caps at 984 hours once enough history exists") {
+    // 985 hourly rows, f10 = 0, 1, 2, ..., 984. At the last row (idx 984), the
+    // trailing 984-hour window is rows [1..984], excluding row 0 -- average
+    // should be (1+984)/2 = 492.5, not (0+984)/2 = 492.
+    auto path = fs::temp_directory_path() / "rope_test_driver_db_f10avg_cap.csv";
+    std::ofstream f(path);
+    f << "datetime,f10\n";
+    auto t0 = rope::parse_datetime("2024-01-01T00:00:00");
+    for (int i = 0; i <= 984; ++i)
+        f << rope::format_iso(t0 + static_cast<rope::TimePoint>(i) * 3600) << "," << i << "\n";
+    f.close();
+
+    auto db  = rope::io::SpaceWeatherDB::from_file(path);
+    auto row = db.lookup(t0 + static_cast<rope::TimePoint>(984) * 3600);
+    CHECK_THAT(row.get("f10_41day_avg"), WithinAbs(492.5f, 1e-3f));
+}
+
+TEST_CASE("SpaceWeatherDB: f10_41day_avg throws if requested but no raw 'f10' column exists") {
+    auto path = fs::temp_directory_path() / "rope_test_driver_db_f10avg_missing.csv";
+    std::ofstream f(path);
+    f << "datetime,kp\n2024-01-01T00:00:00,2.0\n";
+    f.close();
+
+    auto db  = rope::io::SpaceWeatherDB::from_file(path);
+    auto row = db.lookup(rope::parse_datetime("2024-01-01T00:00:00"));
+    REQUIRE_THROWS_AS(row.get("f10_41day_avg"), std::runtime_error);
+}
+
+TEST_CASE("SpaceWeatherDB: a raw CSV column literally named f10_41day_avg is used directly, not recomputed") {
+    auto path = fs::temp_directory_path() / "rope_test_driver_db_f10avg_direct.csv";
+    std::ofstream f(path);
+    // 115.0 deliberately differs from what compute_f10_41day_avg would give for this single row (120.0).
+    f << "datetime,f10,f10_41day_avg\n2024-01-01T00:00:00,120.0,115.0\n";
+    f.close();
+
+    auto db  = rope::io::SpaceWeatherDB::from_file(path);
+    auto row = db.lookup(rope::parse_datetime("2024-01-01T00:00:00"));
+    CHECK_THAT(row.get("f10_41day_avg"), WithinAbs(115.0f, 1e-4f));
+}
+
+TEST_CASE("SpaceWeatherDB: f10_41day_avg can be supplied directly without any raw 'f10' column") {
+    auto path = fs::temp_directory_path() / "rope_test_driver_db_f10avg_standalone.csv";
+    std::ofstream f(path);
+    f << "datetime,kp,f10_41day_avg\n2024-01-01T00:00:00,2.0,108.3\n";
+    f.close();
+
+    auto db  = rope::io::SpaceWeatherDB::from_file(path);
+    auto row = db.lookup(rope::parse_datetime("2024-01-01T00:00:00"));
+    CHECK_THAT(row.get("f10_41day_avg"), WithinAbs(108.3f, 1e-4f));
+}
+
+TEST_CASE("SpaceWeatherBin: f10_41day_avg round-trips as a raw column, used directly not recomputed") {
+    auto path = fs::temp_directory_path() / "rope_test_driver_db_f10avg_swbin_src.csv";
+    std::ofstream f(path);
+    f << "datetime,f10,f10_41day_avg\n2024-01-01T00:00:00,120.0,115.0\n";
+    f.close();
+
+    auto db  = rope::io::SpaceWeatherDB::from_file(path);
+    auto bin = fs::temp_directory_path() / "rope_test_driver_db_f10avg.swbin";
+    rope::io::SpaceWeatherBin::save(db, bin);
+
+    auto loaded = rope::io::SpaceWeatherBin::load(bin);
+    auto row    = loaded.lookup(rope::parse_datetime("2024-01-01T00:00:00"));
+    CHECK_THAT(row.get("f10_41day_avg"), WithinAbs(115.0f, 1e-4f));
+}
+
 TEST_CASE("SpaceWeatherDB: lookup at a missing timestamp throws") {
     auto db = rope::io::SpaceWeatherDB::from_file(make_driver_csv());
     REQUIRE_THROWS_AS(

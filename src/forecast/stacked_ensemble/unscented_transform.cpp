@@ -81,7 +81,9 @@ UnscentedResult ut_sigma_points(
         for (int i   = 0; i   < K;     ++i)   cPt[i * K + i] += c_ut * EPS_JIT;
 
         if (!cholesky_inplace(cPt.data(), K)) {
-            for (int i = 0; i < K; ++i) cPt[i * K + i] += c_ut * EPS_JIT2;
+            // cholesky_inplace overwrote cPt in place before failing; rebuild from Pt.
+            for (int idx = 0; idx < K * K; ++idx) cPt[idx] = c_ut * Pt[idx];
+            for (int i   = 0; i   < K;     ++i)   cPt[i * K + i] += c_ut * (EPS_JIT + EPS_JIT2);
             if (!cholesky_inplace(cPt.data(), K))
                 throw std::runtime_error(
                     "UT: Cholesky failed at t=" + std::to_string(t));
