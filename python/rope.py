@@ -39,7 +39,10 @@ _ERR_NAMES = {
     5: "bad argument",
     6: "internal error",
     7: "forecast cache corrupt",
+    8: "buffer too small",
 }
+
+_ERR_BUFFER_TOO_SMALL = 8
 
 
 class RopeError(RuntimeError):
@@ -182,7 +185,12 @@ class Rope:
     # Forecast (via CLI subprocess)
     # ------------------------------------------------------------------
 
-    def forecast(self, start: "str | datetime", horizon: int) -> dict:
+    def forecast(
+        self,
+        start: "str | datetime",
+        horizon: int,
+        drivers: "dict | None" = None,
+    ) -> dict:
         """
         Run a forecast and atomically write the resulting grid to the cache
         file (discarding any previous forecast).
@@ -191,6 +199,17 @@ class Rope:
         ----------
         start   : Forecast start time — ISO 8601 string or datetime (UTC).
         horizon : Forecast duration in hours.
+        drivers : Optional explicit driver data, e.g.
+                      {"datetime": [...], "f10": [...], "kp": [...]}
+                  overriding paths.driver_path/manifest.drivers.source for this
+                  call only. Any raw column name is accepted, including
+                  "f10_41day_avg" -- supplied directly it's used as-is;
+                  omitted, it falls back to being computed from "f10" history.
+                  Must cover the full contiguous hourly window the
+                  model needs (history + horizon) — same requirement as an
+                  explicit driver_path CSV, just supplied inline. All-or-nothing:
+                  a column the model needs but this dict omits is not backfilled
+                  from any other source.
 
         Returns the CLI's response, e.g.:
             {"status": "ok", "window_start": "...", "window_end": "..."}
@@ -211,13 +230,25 @@ class Rope:
         if self._config_path:
             cmd += ["--config", str(self._config_path)]
 
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode != 0:
-            raise RopeError(6, (proc.stderr or proc.stdout).strip())
+        temp_driver_path = None
+        try:
+            if drivers is not None:
+                temp_driver_path = _write_temp_driver_csv(drivers)
+                cmd += ["--driver", temp_driver_path]
 
-        # Take the last non-empty line — guards against any preamble lines.
-        lines = [l for l in proc.stdout.splitlines() if l.strip()]
-        return json.loads(lines[-1])
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RopeError(6, (proc.stderr or proc.stdout).strip())
+
+            # Take the last non-empty line — guards against any preamble lines.
+            lines = [l for l in proc.stdout.splitlines() if l.strip()]
+            return json.loads(lines[-1])
+        finally:
+            if temp_driver_path:
+                try:
+                    os.unlink(temp_driver_path)
+                except OSError:
+                    pass
 
     # ------------------------------------------------------------------
     # Interpolation queries (via C API)
@@ -330,6 +361,60 @@ class Rope:
         return [{"density": den_arr[i], "uncertainty": unc_arr[i]} for i in range(n)]
 
     # ------------------------------------------------------------------
+    # Manifest introspection (via C API)
+    # ------------------------------------------------------------------
+
+    def get_model_info(self) -> dict:
+        """
+        Returns the model manifest summary: kind, latent_dim, grid, validated,
+        ic.{kind, axes}, and drivers.{source, columns: [{name, description}, ...]}.
+
+        Uses the fast ctypes path, like get()/get_batch() — this is read-only
+        manifest introspection, not a forecast run, so it never shells out to
+        the CLI subprocess.
+        """
+        exported_dir = str(self._exported_dir()).encode()
+        err = ctypes.create_string_buffer(256)
+        buf_len = 4096
+        while True:
+            buf = ctypes.create_string_buffer(buf_len)
+            rc = self._lib.rope_get_manifest_info(exported_dir, buf, buf_len, err, len(err))
+            if rc == 0:
+                return json.loads(buf.value.decode())
+            if rc == _ERR_BUFFER_TOO_SMALL:
+                buf_len *= 4
+                continue
+            raise RopeError(rc, err.value.decode())
+
+    def print_model(self):
+        """Pretty-prints get_model_info() — what this model expects, without
+        having to read model_manifest.json by hand."""
+        info = self.get_model_info()
+        print(f"Model kind:    {info['kind']}")
+        print(f"Latent dim:    {info['latent_dim']}")
+        print(f"Validated:     {info['validated']}")
+        grid = info["grid"]
+        print(f"Grid:          {grid['n_lst']} x {grid['n_lat']} x {grid['n_alt']}"
+              f"  (lat {grid['lat_min_deg']}..{grid['lat_max_deg']} deg,"
+              f" alt {grid['alt_min_km']}..{grid['alt_max_km']} km)")
+        ic = info["ic"]
+        print(f"IC:            kind={ic['kind']} axes={ic['axes']}")
+        drivers = info["drivers"]
+        print(f"Driver source: {drivers['source']}")
+        print("Driver columns (in order):")
+        for col in drivers["columns"]:
+            print(f"  {col['name']}\t{col['description']}")
+
+    def _exported_dir(self) -> Path:
+        raw = _conf_get(self._config_path, "paths", "exported_dir", "")
+        if not raw:
+            raise RuntimeError(f"paths.exported_dir not set in {self._config_path}")
+        p = Path(raw)
+        if not p.is_absolute():
+            p = self._config_path.parent / p
+        return p
+
+    # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
@@ -359,6 +444,12 @@ class Rope:
         lib.rope_close.restype  = None
         lib.rope_close.argtypes = [ctypes.c_void_p]
 
+        lib.rope_get_manifest_info.restype  = ctypes.c_int
+        lib.rope_get_manifest_info.argtypes = [
+            ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int,
+            ctypes.c_char_p, ctypes.c_int,
+        ]
+
         return lib
 
 
@@ -383,6 +474,32 @@ def _write_temp_conf(base: Path, section: str, key: str, value: str) -> str:
     fd, path = tempfile.mkstemp(suffix=".conf", prefix="rope_")
     with os.fdopen(fd, "w") as f:
         cp.write(f)
+    return path
+
+
+def _write_temp_driver_csv(drivers: dict) -> str:
+    if "datetime" not in drivers:
+        raise ValueError("drivers dict must include a 'datetime' column")
+
+    names   = list(drivers.keys())
+    lengths = {len(v) for v in drivers.values()}
+    if len(lengths) != 1:
+        raise ValueError("all driver columns must have the same length")
+    n = lengths.pop()
+
+    fd, path = tempfile.mkstemp(suffix=".csv", prefix="rope_drivers_")
+    with os.fdopen(fd, "w") as f:
+        f.write(",".join(names) + "\n")
+        for i in range(n):
+            row = []
+            for name in names:
+                v = drivers[name][i]
+                if name == "datetime" and isinstance(v, datetime):
+                    if v.tzinfo is None:
+                        v = v.replace(tzinfo=timezone.utc)
+                    v = v.strftime("%Y-%m-%dT%H:%M:%S")
+                row.append(str(v))
+            f.write(",".join(row) + "\n")
     return path
 
 

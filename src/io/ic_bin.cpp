@@ -5,12 +5,33 @@
 #include <cstdint>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace rope::io {
 
-static constexpr std::uint32_t IC_MAGIC   = 0x52504943u;  // "RPIC"
-static constexpr std::uint32_t IC_VERSION = 1u;
+static constexpr std::uint32_t IC_MAGIC        = 0x52504943u;  // "RPIC"
+static constexpr std::uint32_t IC_VERSION      = 2u;
+static constexpr std::uint32_t IC_MAX_NAME_LEN = 256u;
+
+static std::string read_axis_name(std::ifstream& f, const std::filesystem::path& bin_path) {
+    std::uint32_t name_len;
+    f.read(reinterpret_cast<char*>(&name_len), 4);
+    if (!f)
+        throw std::runtime_error(
+            "IcBin::load: unexpected EOF reading axis name in " + bin_path.string());
+    if (name_len == 0 || name_len > IC_MAX_NAME_LEN)
+        throw std::runtime_error(
+            "IcBin::load: implausible axis name length " + std::to_string(name_len) +
+            " in " + bin_path.string());
+
+    std::string name(name_len, '\0');
+    f.read(name.data(), name_len);
+    if (!f)
+        throw std::runtime_error(
+            "IcBin::load: unexpected EOF reading axis name in " + bin_path.string());
+    return name;
+}
 
 ICTable IcBin::load(const std::filesystem::path& bin_path) {
     std::ifstream f(bin_path, std::ios::binary);
@@ -18,12 +39,11 @@ ICTable IcBin::load(const std::filesystem::path& bin_path) {
         throw std::runtime_error(
             "IcBin::load: cannot open " + bin_path.string());
 
-    std::uint32_t magic, version, nrows, latent_dim, reserved;
+    std::uint32_t magic, version, nrows, latent_dim;
     f.read(reinterpret_cast<char*>(&magic),      4);
     f.read(reinterpret_cast<char*>(&version),    4);
     f.read(reinterpret_cast<char*>(&nrows),      4);
     f.read(reinterpret_cast<char*>(&latent_dim), 4);
-    f.read(reinterpret_cast<char*>(&reserved),   4);
 
     if (!f)
         throw std::runtime_error(
@@ -42,12 +62,17 @@ ICTable IcBin::load(const std::filesystem::path& bin_path) {
 
     const int K = static_cast<int>(latent_dim);
 
-    std::vector<float> pts_f10(nrows), pts_kp(nrows);
+    std::vector<std::string> axis_names = {
+        read_axis_name(f, bin_path),
+        read_axis_name(f, bin_path)
+    };
+
+    std::vector<float> pts_axis0(nrows), pts_axis1(nrows);
     std::vector<float> vals(static_cast<std::size_t>(nrows) * K);
 
     for (std::uint32_t i = 0; i < nrows; ++i) {
-        f.read(reinterpret_cast<char*>(&pts_f10[i]), 4);
-        f.read(reinterpret_cast<char*>(&pts_kp[i]),  4);
+        f.read(reinterpret_cast<char*>(&pts_axis0[i]), 4);
+        f.read(reinterpret_cast<char*>(&pts_axis1[i]), 4);
         f.read(reinterpret_cast<char*>(&vals[i * K]), static_cast<std::streamsize>(K * 4));
 
         if (!f)
@@ -65,29 +90,29 @@ ICTable IcBin::load(const std::filesystem::path& bin_path) {
         return v;
     };
 
-    std::vector<float> f10_axis = unique_sorted(pts_f10);
-    std::vector<float> kp_axis  = unique_sorted(pts_kp);
-    const std::size_t  nf = f10_axis.size();
-    const std::size_t  nk = kp_axis.size();
+    std::vector<float> axis0_grid = unique_sorted(pts_axis0);
+    std::vector<float> axis1_grid = unique_sorted(pts_axis1);
+    const std::size_t  n0 = axis0_grid.size();
+    const std::size_t  n1 = axis1_grid.size();
 
-    std::vector<int> grid_idx(nf * nk, -1);
+    std::vector<int> grid_idx(n0 * n1, -1);
     const float EPS = 1e-4f;
     for (std::uint32_t i = 0; i < nrows; ++i) {
-        int fi = static_cast<int>(
-            std::lower_bound(f10_axis.begin(), f10_axis.end(),
-                             pts_f10[i] - EPS) - f10_axis.begin());
-        int ki = static_cast<int>(
-            std::lower_bound(kp_axis.begin(), kp_axis.end(),
-                             pts_kp[i] - EPS) - kp_axis.begin());
-        if (fi < static_cast<int>(nf) && ki < static_cast<int>(nk))
-            grid_idx[fi * nk + ki] = static_cast<int>(i);
+        int i0 = static_cast<int>(
+            std::lower_bound(axis0_grid.begin(), axis0_grid.end(),
+                             pts_axis0[i] - EPS) - axis0_grid.begin());
+        int i1 = static_cast<int>(
+            std::lower_bound(axis1_grid.begin(), axis1_grid.end(),
+                             pts_axis1[i] - EPS) - axis1_grid.begin());
+        if (i0 < static_cast<int>(n0) && i1 < static_cast<int>(n1))
+            grid_idx[i0 * n1 + i1] = static_cast<int>(i);
     }
 
-    return ICTable{K,
-                   std::move(pts_f10), std::move(pts_kp),
+    return ICTable{K, std::move(axis_names),
+                   std::move(pts_axis0), std::move(pts_axis1),
                    std::move(vals),
-                   std::move(f10_axis), std::move(kp_axis),
-                   std::move(grid_idx), nk};
+                   std::move(axis0_grid), std::move(axis1_grid),
+                   std::move(grid_idx), n1};
 }
 
 void IcBin::save(const ICTable& table,
@@ -97,19 +122,23 @@ void IcBin::save(const ICTable& table,
         throw std::runtime_error(
             "IcBin::save: cannot open " + bin_path.string());
 
-    const auto nrows      = static_cast<std::uint32_t>(table.pts_f10_.size());
+    const auto nrows      = static_cast<std::uint32_t>(table.pts_axis0_.size());
     const auto latent_dim = static_cast<std::uint32_t>(table.k_);
-    const std::uint32_t reserved = 0u;
 
     f.write(reinterpret_cast<const char*>(&IC_MAGIC),   4);
     f.write(reinterpret_cast<const char*>(&IC_VERSION), 4);
     f.write(reinterpret_cast<const char*>(&nrows),      4);
     f.write(reinterpret_cast<const char*>(&latent_dim), 4);
-    f.write(reinterpret_cast<const char*>(&reserved),   4);
+
+    for (const auto& name : table.axis_names_) {
+        const auto name_len = static_cast<std::uint32_t>(name.size());
+        f.write(reinterpret_cast<const char*>(&name_len), 4);
+        f.write(name.data(), static_cast<std::streamsize>(name_len));
+    }
 
     for (std::uint32_t i = 0; i < nrows; ++i) {
-        f.write(reinterpret_cast<const char*>(&table.pts_f10_[i]), 4);
-        f.write(reinterpret_cast<const char*>(&table.pts_kp_[i]),  4);
+        f.write(reinterpret_cast<const char*>(&table.pts_axis0_[i]), 4);
+        f.write(reinterpret_cast<const char*>(&table.pts_axis1_[i]), 4);
         f.write(reinterpret_cast<const char*>(&table.vals_[i * table.k_]),
                 static_cast<std::streamsize>(table.k_ * 4));
     }

@@ -11,8 +11,10 @@
 #include "rope/core/platform.h"
 #include "rope/interpolate/grid_interpolator.h"
 #include "rope/io/mapped_forecast_grid.h"
+#include "rope/io/model_manifest.h"
 
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -160,4 +162,37 @@ int rope_query_batch(rope_interp_t* interp,
 
 void rope_close(rope_interp_t* interp) {
     delete interp;
+}
+
+// ---------------------------------------------------------------------------
+// rope_get_manifest_info
+// ---------------------------------------------------------------------------
+
+int rope_get_manifest_info(const char* exported_dir,
+                           char* buf, int buf_len,
+                           char* err_buf, int err_len) {
+    if (!exported_dir || !buf || buf_len <= 0) {
+        fill_err(err_buf, err_len, "rope_get_manifest_info: NULL or invalid argument");
+        return ROPE_ERR_BAD_ARG;
+    }
+    try {
+        auto manifest = rope::io::ModelManifest::load(std::filesystem::path{exported_dir});
+        std::string summary = manifest.to_summary_json();
+
+        if (static_cast<int>(summary.size()) >= buf_len) {
+            fill_err(err_buf, err_len,
+                     ("rope_get_manifest_info: buffer too small, need at least " +
+                      std::to_string(summary.size() + 1) + " bytes").c_str());
+            return ROPE_ERR_BUFFER_TOO_SMALL;
+        }
+        std::memcpy(buf, summary.data(), summary.size());
+        buf[summary.size()] = '\0';
+        return ROPE_OK;
+    } catch (const std::exception& e) {
+        fill_err(err_buf, err_len, e.what());
+        return ROPE_ERR_INTERNAL;
+    } catch (...) {
+        fill_err(err_buf, err_len, "rope_get_manifest_info: unknown error");
+        return ROPE_ERR_INTERNAL;
+    }
 }

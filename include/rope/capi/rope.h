@@ -47,6 +47,17 @@ ROPE_API int rope_query_batch(rope_interp_t* interp,
 /* Releases the handle (unmaps the cache file). Safe to call with NULL. */
 ROPE_API void rope_close(rope_interp_t* interp);
 
+/* Writes a NUL-terminated JSON summary of exported_dir/model_manifest.json into buf
+   (kind, latent_dim, grid, validated, ic.{kind,axes}, drivers.{source,columns}).
+   Does not require an open rope_interp_t -- reads the manifest directly, independent
+   of any cached forecast. Returns ROPE_OK, or ROPE_ERR_BUFFER_TOO_SMALL if buf_len is
+   too small for the summary (never silently truncates). */
+ROPE_API int rope_get_manifest_info(const char* exported_dir,
+                                     char*       buf,
+                                     int         buf_len,
+                                     char*       err_buf,
+                                     int         err_len);
+
 /* Mode constants */
 #define ROPE_HOLD   0
 #define ROPE_INTERP 1
@@ -59,6 +70,7 @@ ROPE_API void rope_close(rope_interp_t* interp);
 #define ROPE_ERR_BAD_ARG         5   /* invalid argument (NULL pointer, etc.) */
 #define ROPE_ERR_INTERNAL        6   /* unexpected internal failure */
 #define ROPE_ERR_CACHE_CORRUPT   7   /* cache file exists but is corrupt or from an incompatible build */
+#define ROPE_ERR_BUFFER_TOO_SMALL 8  /* caller-supplied buffer too small for the output; see err_buf for the required size */
 
 #ifdef __cplusplus
 }

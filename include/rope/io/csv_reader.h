@@ -14,6 +14,7 @@ public:
 
     std::size_t nrows() const noexcept { return n_rows_; }
     bool has_column(std::string_view name) const noexcept;
+    const std::vector<std::string>& column_names() const noexcept { return headers_; }
 
     const std::string& get(std::string_view col, std::size_t row) const;
     float              get_float(std::string_view col, std::size_t row) const;

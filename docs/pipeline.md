@@ -50,7 +50,7 @@ Load ic_table.icbin or ic_table.csv → ICTable (bilinear + nearest-neighbour)
 Resolve driver data       → SpaceWeatherDB::from_file(driver_path or cache)
 Load M base models        → vector<IModel>
 Load meta_model.onnx      → EnsembleFuser
-Load decoder stage(s)     → vector<LatentDecoder>
+Load decoder               → IDecoder (make_decoder(); today always a CoaeDecoder wrapping one or more stages)
 Construct SlidingWindowRollout
 ```
 
@@ -181,16 +181,18 @@ Reference model (`K=10`, 72×36×45 grid): ~19.6 MB/chunk-hour with uncertainty 
 | Pipeline implementation | `src/forecast/stacked_ensemble/stacked_ensemble_pipeline.h/.cpp` |
 | Rollout strategy | `src/forecast/stacked_ensemble/rollout_strategy.h`, `src/forecast/stacked_ensemble/sliding_window_rollout.h` |
 | Ensemble fuser | `src/forecast/stacked_ensemble/ensemble_fuser.h` |
-| Latent decoder | `src/forecast/stacked_ensemble/latent_decoder.h` |
 | Unscented Transform | `src/forecast/stacked_ensemble/unscented_transform.h/.cpp` |
-| Grid stitching | `src/forecast/stacked_ensemble/grid_stitch.h` |
 | Model interface | `src/forecast/backends/model_interface.h` |
 | Model factory | `src/forecast/backends/model_factory.cpp` |
 | ONNX backend | `src/forecast/backends/onnx_model.h` |
 | LibTorch backend | `src/forecast/backends/libtorch_model.h` |
 | Runtime version check | `src/forecast/backends/runtime_compat.h/.cpp` |
+| IC source abstraction | `src/forecast/backends/ic_source.h`, `ic_source_factory.h/.cpp`, `lookup_table_ic_source.h` |
+| Decoder abstraction | `src/forecast/backends/decoder.h`, `decoder_factory.h/.cpp`, `coae_decoder.h/.cpp` |
+| Latent decoder (single-stage batching) | `src/forecast/backends/latent_decoder.h` |
+| Grid stitching | `src/forecast/backends/grid_stitch.h` |
 
-`stacked_ensemble/` holds everything private to this one pipeline kind; `backends/` holds the ONNX/LibTorch `IModel` abstraction, shared by any kind that runs neural-net inference. See [adding-a-pipeline.md](adding-a-pipeline.md) for the convention a new kind follows.
+`stacked_ensemble/` holds everything private to this one pipeline kind; `backends/` holds cross-kind, pluggable implementation-selection abstractions — the ONNX/LibTorch `IModel` abstraction shared by any kind that runs neural-net inference, `IICSource` (IC seeding), and `IDecoder` (latent-to-grid decoding). See [adding-a-pipeline.md](adding-a-pipeline.md) for the convention a new kind follows.
 
 ---
 

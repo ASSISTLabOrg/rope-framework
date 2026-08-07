@@ -31,6 +31,8 @@ add_executable(rope_tests
     test_grid_stitch.cpp
     test_kind_registry.cpp
     test_ic_kind_registry.cpp
+    test_decoder_kind_registry.cpp
+    test_driver_registry.cpp
     test_manifest_schema_fixtures.cpp
     test_forecast_grid_bin.cpp
     test_mapped_forecast_grid.cpp

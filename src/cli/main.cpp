@@ -10,9 +10,10 @@
 #endif
 //
 // Commands:
-//   rope forecast --start <ISO8601> --horizon <h> [--config <path>]
+//   rope forecast --start <ISO8601> --horizon <h> [--config <path>] [--driver <path>]
 //   rope get      --mode hold|interp --time <ISO8601> --lst <f> --lat <f> --alt <f>
 //   rope get      --mode hold|interp --file <csv> [--output <path>]
+//   rope manifest [--config <path>] [--json]
 //
 // `rope forecast` runs inference in this process and atomically writes the
 // resulting grid to a per-user cache file; `rope get` reads that file
@@ -29,6 +30,7 @@
 #include "rope/io/ic_table.h"
 #include "rope/io/ic_bin.h"
 #include "rope/io/mapped_forecast_grid.h"
+#include "rope/io/model_manifest.h"
 
 #ifdef ROPE_HAS_ZARR
 #include "rope/io/forecast_zarr_writer.h"
@@ -140,7 +142,7 @@ int main(int argc, char** argv) {
     // ---- forecast subcommand ----
     auto* fc = app.add_subcommand("forecast",
                                    "Run a forecast and cache the resulting grid");
-    std::string fc_start, fc_config, fc_zarr;
+    std::string fc_start, fc_config, fc_zarr, fc_driver;
     int         fc_horizon = 0;
     fc->add_option("--start",   fc_start,   "Forecast start time (ISO 8601, UTC)")
       ->required();
@@ -149,6 +151,16 @@ int main(int argc, char** argv) {
     fc->add_option("--config",  fc_config,  "Config file path");
     fc->add_option("--zarr",    fc_zarr,
                    "Also export as a Zarr store (container directory)");
+    fc->add_option("--driver",  fc_driver,
+                   "Explicit driver CSV/.swbin path (overrides paths.driver_path; no cache, no network)");
+
+    // ---- manifest subcommand ----
+    auto* mc = app.add_subcommand("manifest",
+                                   "Print the model manifest (driver columns, grid shape, etc.)");
+    std::string mc_config;
+    bool        mc_json = false;
+    mc->add_option("--config", mc_config, "Config file path");
+    mc->add_flag("--json",     mc_json,   "Print as JSON instead of a human-readable summary");
 
     // ---- get subcommand ----
     auto* gc = app.add_subcommand("get",
@@ -208,6 +220,8 @@ int main(int argc, char** argv) {
         try {
             rope::io::ConfigReader config{config_path};
             auto fcfg = rope::forecast::config_from_reader(config, config_path.parent_path());
+            if (!fc_driver.empty())
+                fcfg.driver_path = fs::path{fc_driver};
             auto pipeline = rope::forecast::load(fcfg);
 
             // Output spans hour 0 (fc_start) through hour fc_horizon, inclusive.
@@ -287,6 +301,45 @@ int main(int argc, char** argv) {
         }
         return 0;
 #endif
+    }
+
+    // ---- manifest ----
+    if (mc->parsed()) {
+        try {
+            fs::path config_path = mc_config.empty()
+                ? default_config(exe_path())
+                : fs::path{mc_config};
+            rope::io::ConfigReader config{config_path};
+            fs::path exported_dir{config.get("paths.exported_dir")};
+            if (exported_dir.is_relative())
+                exported_dir = config_path.parent_path() / exported_dir;
+
+            auto manifest = rope::io::ModelManifest::load(exported_dir);
+
+            if (mc_json) {
+                std::cout << json::parse(manifest.to_summary_json()).dump(2) << "\n";
+            } else {
+                std::cout << "Model kind:    " << manifest.kind << "\n";
+                std::cout << "Latent dim:    " << manifest.latent_dim << "\n";
+                std::cout << "Validated:     " << (manifest.validated ? "true" : "false") << "\n";
+                std::cout << "Grid:          " << manifest.grid.n_lst << " x " << manifest.grid.n_lat
+                          << " x " << manifest.grid.n_alt << "  (lat " << manifest.grid.lat_min_deg
+                          << ".." << manifest.grid.lat_max_deg << " deg, alt " << manifest.grid.alt_min_km
+                          << ".." << manifest.grid.alt_max_km << " km)\n";
+                std::cout << "IC:            kind=" << manifest.ic_kind << " axes=[";
+                for (std::size_t i = 0; i < manifest.ic_grid_axes.size(); ++i)
+                    std::cout << (i ? ", " : "") << manifest.ic_grid_axes[i];
+                std::cout << "]\n";
+                std::cout << "Driver source: " << manifest.driver_source << "\n";
+                std::cout << "Driver columns (in order):\n";
+                for (const auto& col : manifest.driver_column_info)
+                    std::cout << "  " << col.name << "\t" << col.description << "\n";
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "rope manifest: " << e.what() << "\n";
+            return 1;
+        }
+        return 0;
     }
 
     // ---- get ----
