@@ -3,7 +3,7 @@
 #include <vector>
 
 #include "rope/core/types.h"
-#include "../../src/forecast/stacked_ensemble/grid_stitch.h"
+#include "../../src/forecast/backends/grid_stitch.h"
 
 using namespace rope;
 using namespace rope::forecast;

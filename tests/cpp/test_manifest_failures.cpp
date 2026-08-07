@@ -22,3 +22,9 @@ TEST_CASE("forecast::load: unrecognized ic.kind throws") {
     cfg.exported_dir = fs::path(ROPE_CPP_FIXTURE_DIR) / "bad_ic_kind";
     CHECK_THROWS_AS(rope::forecast::load(cfg), std::runtime_error);
 }
+
+TEST_CASE("forecast::load: unrecognized decoder.kind throws") {
+    rope::forecast::Config cfg;
+    cfg.exported_dir = fs::path(ROPE_CPP_FIXTURE_DIR) / "bad_decoder_kind";
+    CHECK_THROWS_AS(rope::forecast::load(cfg), std::runtime_error);
+}

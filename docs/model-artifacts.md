@@ -73,9 +73,9 @@ Decodes latent vectors to physical density grids.
 density_phys = 10 ^ (output_norm × σ_cae + μ_cae)
 ```
 
-where `(μ_cae, σ_cae)` come from `stats_cae.bin`. This step is applied by `CAEDenormalizer::apply_inplace()` in the `LatentDecoder`.
+where `(μ_cae, σ_cae)` come from `stats_cae.bin`. This step is applied by `CoaeDenormalizer::apply_inplace()` (`rope/io/stats.h`) in the `LatentDecoder`.
 
-The decoder is the most compute-intensive step for long horizons (or when UT is enabled, where it processes `H×21` inputs). It is called with batches of up to `decode_batch_size` latent vectors (manifest default 120; capped lower via `rope.conf`'s `forecast.decode_batch_size` — see [pipeline.md](pipeline.md)).
+The decoder is the most compute-intensive step for long horizons (or when UT is enabled, where it processes `H×21` inputs). It is called with batches of up to `decode_batch_size` latent vectors (manifest default 120; capped lower via `rope.conf`'s `forecast.decode_batch_size` — see [pipeline.md](pipeline.md)). Manifest-side, `decode_batch_size` lives at `decoder.params.decode_batch_size`, alongside the per-stage `decoder.params.stages` array — both top-level, kind-agnostic fields (see `model-registry.md`'s "COAE decoder" section for the full manifest shape and the `IDecoder`/`make_decoder()`/`CoaeDecoder` abstraction).
 
 **Backend selection:** ONNX Runtime is the default. If built with `ROPE_USE_LIBTORCH=ON`, the `.pt` TorchScript file is used instead and respects `decoder.device = cuda`.
 

@@ -1,8 +1,8 @@
 #include "stacked_ensemble_pipeline.h"
 
+#include "backends/decoder_factory.h"
 #include "backends/ic_source_factory.h"
 #include "backends/runtime_compat.h"
-#include "grid_stitch.h"
 #include "sliding_window_rollout.h"
 #include "unscented_transform.h"
 
@@ -71,7 +71,6 @@ StackedEnsemblePipeline::StackedEnsemblePipeline(
     K_            = manifest.latent_dim;
     S_            = spec.seq_len;
     M_            = static_cast<int>(spec.base_models.size());
-    DECODE_BATCH_ = spec.decode_batch_size;
     compute_uncertainty_ = cfg.compute_uncertainty;
     driver_cols_         = manifest.driver_columns;
     driver_source_       = manifest.driver_source;
@@ -92,10 +91,11 @@ StackedEnsemblePipeline::StackedEnsemblePipeline(
             std::to_string(dd));
 
     load_ic_source(manifest, dir);
+    log_("Loading decoder\xe2\x80\xa6");
+    decoder_ = make_decoder(dir, manifest, cfg);
     load_sw_db(cfg);
     load_base_models(cfg, manifest, dir);
     load_meta_model(cfg, manifest, dir, D);
-    load_decoder_stages(cfg, manifest, dir);
 
     rollout_ = std::make_unique<SlidingWindowRollout>(K_, S_, D);
 
@@ -181,67 +181,6 @@ void StackedEnsemblePipeline::load_meta_model(
                    meta_threads, /*inter_op_threads=*/1,
                    false, "cpu"),
         K_, S_, D, M_);
-}
-
-void StackedEnsemblePipeline::load_decoder_stages(
-    const Config& cfg, const io::ModelManifest& manifest, const fs::path& dir)
-{
-    const auto& spec = *manifest.stacked_ensemble;
-    int dec_threads = cfg.intra_threads_decoder;
-    if (dec_threads <= 0)
-        dec_threads = static_cast<int>(std::thread::hardware_concurrency());
-
-    const int decode_batch = (cfg.decode_batch_size > 0)
-        ? std::min(cfg.decode_batch_size, DECODE_BATCH_)
-        : DECODE_BATCH_;
-
-    log_("Loading " + std::to_string(spec.decoders.size()) + " decoder stage(s)\xe2\x80\xa6"
-         "  decode_batch_size=" + std::to_string(decode_batch));
-    decoder_stages_.reserve(spec.decoders.size());
-
-    for (const auto& d : spec.decoders) {
-#ifdef ROPE_USE_LIBTORCH
-        std::string  dec_key    = "libtorch";
-        ModelBackend dec_be     = ModelBackend::LibTorch;
-        std::string  dec_device = cfg.decoder_device;
-        if (d.backends.find(dec_key) == d.backends.end()) {
-            dec_key    = "onnx";
-            dec_be     = ModelBackend::ONNX;
-            dec_device = "cpu";
-        }
-#else
-        std::string  dec_key    = "onnx";
-        ModelBackend dec_be     = ModelBackend::ONNX;
-        std::string  dec_device = "cpu";
-#endif
-        auto it = d.backends.find(dec_key);
-        if (it == d.backends.end())
-            throw std::runtime_error(
-                "Decoder stage '" + d.stats +
-                "': no usable backend key in manifest (tried '" + dec_key + "')");
-
-#ifdef ROPE_USE_LIBTORCH
-        log_("  stage [" + std::to_string(d.alt_start) + ", " +
-             std::to_string(d.alt_end) + "): backend=libtorch  device=" + dec_device);
-#else
-        log_("  stage [" + std::to_string(d.alt_start) + ", " +
-             std::to_string(d.alt_end) + "): backend=onnx  threads=" +
-             std::to_string(dec_threads));
-#endif
-
-        io::Stats stats_cae = io::Stats::load(dir / d.stats);
-
-        auto& stage     = decoder_stages_.emplace_back();
-        stage.alt_start = d.alt_start;
-        stage.alt_end   = d.alt_end;
-        stage.model     = make_model((dir / it->second).string(),
-                                     dec_be, dec_threads, /*inter_op_threads=*/1,
-                                     false, dec_device);
-        stage.denorm    = std::make_unique<io::CAEDenormalizer>(stats_cae);
-        stage.decoder   = std::make_unique<LatentDecoder>(
-            *stage.model, *stage.denorm, decode_batch,
-            d.alt_end - d.alt_start, grid_shape_.n_lst, grid_shape_.n_lat);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -402,12 +341,8 @@ void StackedEnsemblePipeline::run_streaming(
                 .subspan(static_cast<std::size_t>(t_lat) * N_SIG * K_,
                          static_cast<std::size_t>(count_lat) * N_SIG * K_);
 
-            std::vector<float> dens_sigmas(static_cast<std::size_t>(count_lat) * N_SIG * voxels, 0.0f);
-            for (auto& stage : decoder_stages_) {
-                auto stage_dens = stage.decoder->decode(sigma_slice, count_lat * N_SIG, K_);
-                stitch_altitude_range(dens_sigmas.data(), stage_dens.data(), count_lat * N_SIG,
-                                      stage.alt_start, stage.alt_end, grid_shape_);
-            }
+            std::vector<float> dens_sigmas =
+                decoder_->decode(sigma_slice, count_lat * N_SIG, K_);
 
             const std::size_t local_voxels = static_cast<std::size_t>(count_lat) * voxels;
             std::vector<float> density_mean(local_voxels, 0.0f);
@@ -450,12 +385,7 @@ void StackedEnsemblePipeline::run_streaming(
             auto mu_slice = std::span(mu_lat)
                 .subspan(static_cast<std::size_t>(t_lat) * K_, static_cast<std::size_t>(count_lat) * K_);
 
-            std::vector<float> density(static_cast<std::size_t>(count_lat) * voxels, 0.0f);
-            for (auto& stage : decoder_stages_) {
-                auto stage_dens = stage.decoder->decode(mu_slice, count_lat, K_);
-                stitch_altitude_range(density.data(), stage_dens.data(), count_lat,
-                                      stage.alt_start, stage.alt_end, grid_shape_);
-            }
+            std::vector<float> density = decoder_->decode(mu_slice, count_lat, K_);
             std::vector<float> uncertainty(static_cast<std::size_t>(count_lat) * voxels, 0.0f);
 
             sink(t_lat,

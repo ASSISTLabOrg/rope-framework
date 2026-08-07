@@ -41,19 +41,18 @@ static const char* VALID_3BM = R"({
             "lat_min_deg": -87.5, "lat_max_deg": 87.5,
             "alt_min_km": 100.0, "alt_max_km": 980.0 },
   "ic": { "kind": "ic_lookup_table", "params": { "grid_axes": ["f10", "kp"], "file": "ic_table.icbin" } },
+  "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [
+      { "backends": { "onnx": "coae_decoder.onnx" },
+        "stats": "stats_cae.bin", "alt_start": 0, "alt_end": 45 }
+    ] } },
   "stacked_ensemble": {
     "seq_len": 3,
-    "decode_batch_size": 120,
     "base_models": [
       { "file": "base_model_00.onnx", "backend": "onnx", "architecture": "lstm", "inter_op_threads": 1 },
       { "file": "base_model_01.onnx", "backend": "onnx", "architecture": "lstm", "inter_op_threads": 1 },
       { "file": "base_model_02.onnx", "backend": "onnx", "architecture": "transformer", "inter_op_threads": 2 }
     ],
-    "meta_model": { "file": "meta_model.onnx", "backend": "onnx" },
-    "decoders": [
-      { "backends": { "onnx": "coae_decoder.onnx" },
-        "stats": "stats_cae.bin", "alt_start": 0, "alt_end": 45 }
-    ]
+    "meta_model": { "file": "meta_model.onnx", "backend": "onnx" }
   }
 })";
 
@@ -89,10 +88,9 @@ TEST_CASE("ModelManifest: missing schema_version throws") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_nover");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_nover"),
@@ -106,10 +104,9 @@ TEST_CASE("ModelManifest: missing latent_dim throws") {
       "runtime_requirements": {"onnxruntime":"1.25"},
       "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]}, "validated": false,
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_noldim");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_noldim"),
@@ -123,10 +120,9 @@ TEST_CASE("ModelManifest: missing drivers throws") {
       "runtime_requirements": {"onnxruntime":"1.25"},
       "latent_dim": 10, "validated": false,
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_nodcols");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_nodcols"),
@@ -141,10 +137,9 @@ TEST_CASE("ModelManifest: drivers.columns entry missing name throws") {
       "latent_dim": 10, "validated": false,
       "drivers": {"source": "s", "columns": [{"description": "d"}]},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_colnoname");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_colnoname"),
@@ -159,10 +154,9 @@ TEST_CASE("ModelManifest: drivers.columns entry missing description throws") {
       "latent_dim": 10, "validated": false,
       "drivers": {"source": "s", "columns": [{"name": "f10"}]},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_colnodesc");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_colnodesc"),
@@ -212,10 +206,9 @@ TEST_CASE("ModelManifest: missing ic throws") {
       "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_noic");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_noic"),
@@ -231,10 +224,9 @@ TEST_CASE("ModelManifest: ic missing kind throws") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_icnokind");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_icnokind"),
@@ -250,10 +242,9 @@ TEST_CASE("ModelManifest: ic.params missing grid_axes throws") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_icnoaxes");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_icnoaxes"),
@@ -269,10 +260,9 @@ TEST_CASE("ModelManifest: valid top-level ic block parses") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_icok");
     auto m = ModelManifest::load(dir);
     CHECK(m.ic_kind == "ic_lookup_table");
@@ -292,10 +282,9 @@ TEST_CASE("ModelManifest: onnx backend without onnxruntime version throws") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_nort");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_nort"),
@@ -311,10 +300,9 @@ TEST_CASE("ModelManifest: libtorch backend without libtorch version throws") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx","libtorch":"d.pt"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx","libtorch":"d.pt"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_nolt");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_nolt"),
@@ -335,7 +323,7 @@ TEST_CASE("ModelManifest: 3 base models parse with correct count") {
     CHECK(m.stacked_ensemble->base_models.size() == 3);
     CHECK(m.stacked_ensemble->base_models[2].inter_op_threads == 2);
     CHECK(m.stacked_ensemble->base_models[2].architecture == "transformer");
-    CHECK(m.stacked_ensemble->decoders.size() == 1);
+    CHECK(m.decoder_stages.size() == 1);
 }
 
 // -------------------------------------------------------------------
@@ -348,10 +336,9 @@ TEST_CASE("ModelManifest: missing grid throws") {
       "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
       "validated": false,
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_nogrid");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_nogrid"),
@@ -367,10 +354,9 @@ TEST_CASE("ModelManifest: grid.lat_min_deg >= lat_max_deg throws") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":87.5,"lat_max_deg":-87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_badlat");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_badlat"),
@@ -387,10 +373,9 @@ TEST_CASE("ModelManifest: grid with a different physical shape parses") {
       "validated": false,
       "grid": {"n_lst":36,"n_lat":18,"n_alt":20,"lat_min_deg":-60.0,"lat_max_deg":60.0,"alt_min_km":150.0,"alt_max_km":500.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":20}]}
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [{"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":20}] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_altgrid");
     auto m = ModelManifest::load(dir);
     CHECK(m.grid.n_lst == 36);
@@ -411,13 +396,12 @@ TEST_CASE("ModelManifest: altitude gap throws") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [
           {"backends":{"onnx":"d0.onnx"},"stats":"s0.bin","alt_start":0,"alt_end":20},
           {"backends":{"onnx":"d1.onnx"},"stats":"s1.bin","alt_start":22,"alt_end":45}
-        ]}
+        ] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_gap");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_gap"),
@@ -434,13 +418,12 @@ TEST_CASE("ModelManifest: altitude overlap throws") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [
           {"backends":{"onnx":"d0.onnx"},"stats":"s0.bin","alt_start":0,"alt_end":25},
           {"backends":{"onnx":"d1.onnx"},"stats":"s1.bin","alt_start":20,"alt_end":45}
-        ]}
+        ] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_overlap");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_overlap"),
@@ -456,12 +439,11 @@ TEST_CASE("ModelManifest: first alt_start != 0 throws") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [
           {"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":1,"alt_end":45}
-        ]}
+        ] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_start");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_start"),
@@ -477,12 +459,11 @@ TEST_CASE("ModelManifest: last alt_end != grid.n_alt throws") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [
           {"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":44}
-        ]}
+        ] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_end");
     REQUIRE_THROWS_AS(
         ModelManifest::load(fs::temp_directory_path() / "rope_mtest_end"),
@@ -499,19 +480,18 @@ TEST_CASE("ModelManifest: valid two-stage altitude split parses") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [
           {"backends":{"onnx":"dec_lo.onnx","libtorch":"dec_lo.pt"},
            "stats":"stats_lo.bin","alt_start":0,"alt_end":22},
           {"backends":{"onnx":"dec_hi.onnx","libtorch":"dec_hi.pt"},
            "stats":"stats_hi.bin","alt_start":22,"alt_end":45}
-        ]}
+        ] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_2stage");
     auto m = ModelManifest::load(dir);
     REQUIRE(m.stacked_ensemble.has_value());
-    const auto& stages = m.stacked_ensemble->decoders;
+    const auto& stages = m.decoder_stages;
     REQUIRE(stages.size() == 2);
     CHECK(stages[0].alt_start == 0);
     CHECK(stages[0].alt_end   == 22);
@@ -532,16 +512,15 @@ TEST_CASE("ModelManifest: out-of-order decoder stages are sorted on load") {
       "validated": false,
       "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
       "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
-      "stacked_ensemble": {"seq_len":3,"decode_batch_size":120,
-        "base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
-        "meta_model":{"file":"m.onnx","backend":"onnx"},
-        "decoders":[
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [
           {"backends":{"onnx":"dec_hi.onnx"},"stats":"stats_hi.bin","alt_start":22,"alt_end":45},
           {"backends":{"onnx":"dec_lo.onnx"},"stats":"stats_lo.bin","alt_start":0,"alt_end":22}
-        ]}
+        ] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
     })", "rope_mtest_order");
     auto m = ModelManifest::load(dir);
-    const auto& stages = m.stacked_ensemble->decoders;
+    const auto& stages = m.decoder_stages;
     REQUIRE(stages.size() == 2);
     CHECK(stages[0].alt_start == 0);
     CHECK(stages[1].alt_start == 22);

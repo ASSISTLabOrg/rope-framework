@@ -320,12 +320,14 @@ if IS_CUSTOM:
             "kind": "ic_lookup_table",
             "params": {"grid_axes": ["f10", "kp"], "file": "ic_table.icbin"},
         },
+        "decoder": {
+            "kind": "coae",
+            "params": {"decode_batch_size": 120, "stages": decoders},
+        },
         "stacked_ensemble": {
             "seq_len": S,
-            "decode_batch_size": 120,
             "base_models": base_models,
             "meta_model": {"file": "meta_model.onnx", "backend": "onnx"},
-            "decoders": decoders,
         },
     }
     print("Writing model_manifest.json …")

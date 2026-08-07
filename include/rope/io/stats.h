@@ -100,9 +100,9 @@ private:
 };
 
 // Converts decoder output (log10 space) to density: 10^(x*sigma+mu). Stats may be scalar or spatial.
-class CAEDenormalizer {
+class CoaeDenormalizer {
 public:
-    explicit CAEDenormalizer(const Stats& stats)
+    explicit CoaeDenormalizer(const Stats& stats)
         : mu_(stats.mu), sigma_(stats.sigma), n_(mu_.size()) {}
 
     // Apply denormalization in-place to a flat (T, 1, 72, 36, 45) block.

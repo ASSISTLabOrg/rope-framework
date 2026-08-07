@@ -5,10 +5,10 @@
 #include "rope/io/driver_db.h"
 #include "rope/io/stats.h"
 
+#include "backends/decoder.h"
 #include "backends/ic_source.h"
 #include "backends/model_interface.h"
 #include "ensemble_fuser.h"
-#include "latent_decoder.h"
 #include "rollout_strategy.h"
 
 #include <functional>
@@ -30,7 +30,7 @@ public:
 
 private:
     // --- Scalars / config ---
-    int  K_, S_, M_, DECODE_BATCH_;
+    int  K_, S_, M_;
     bool compute_uncertainty_{true};
     GridSpec grid_shape_;
     std::string manifest_kind_;
@@ -48,15 +48,8 @@ private:
     std::vector<std::unique_ptr<IModel>>   base_models_;
     std::unique_ptr<EnsembleFuser>         meta_model_;
 
-    struct DecoderStage {
-        std::unique_ptr<IModel>              model;
-        std::unique_ptr<io::CAEDenormalizer> denorm;
-        std::unique_ptr<LatentDecoder>       decoder;
-        int alt_start;
-        int alt_end;
-    };
-    std::vector<DecoderStage>              decoder_stages_;
-    std::unique_ptr<IRolloutStrategy>      rollout_;
+    std::unique_ptr<IDecoder>          decoder_;
+    std::unique_ptr<IRolloutStrategy>  rollout_;
 
     // --- Constructor helpers ---
     void load_ic_source(const io::ModelManifest& manifest,
@@ -66,8 +59,6 @@ private:
                            const std::filesystem::path& dir);
     void load_meta_model(const Config& cfg, const io::ModelManifest& manifest,
                           const std::filesystem::path& dir, int D);
-    void load_decoder_stages(const Config& cfg, const io::ModelManifest& manifest,
-                              const std::filesystem::path& dir);
 
     // --- Sequence building (formerly SequenceBuilder) ---
     std::vector<float> build_X_init_norm(

@@ -58,8 +58,8 @@ FetchContent_Declare(
 )
 FetchContent_Declare(
     rope_registry
-    URL      https://github.com/AssistLabOrg/rope-registry/archive/refs/tags/v0.4.tar.gz
-    URL_HASH SHA256=337b5d09bf168c76830fdc82b5e9a647fcf476b8e72524c1e8b0d39c1539d6c8
+    URL      https://github.com/AssistLabOrg/rope-registry/archive/refs/tags/v0.5.tar.gz
+    URL_HASH SHA256=e966efe87f34f77f1a3b59f1b0a6658bf14a8e9609e12511a23fe0cfe0774a59
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(nlohmann_json CLI11 rope_registry)
@@ -199,6 +199,8 @@ if(ORT_INC AND ORT_LIB)
         src/forecast/backends/runtime_compat.cpp
         src/forecast/backends/model_factory.cpp
         src/forecast/backends/ic_source_factory.cpp
+        src/forecast/backends/decoder_factory.cpp
+        src/forecast/backends/coae_decoder.cpp
         src/forecast/stacked_ensemble/stacked_ensemble_pipeline.cpp
         src/forecast/stacked_ensemble/unscented_transform.cpp
     )

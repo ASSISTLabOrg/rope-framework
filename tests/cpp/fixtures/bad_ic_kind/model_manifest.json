@@ -27,13 +27,31 @@
   "ic": {
     "kind": "nonexistent_ic_kind",
     "params": {
-      "grid_axes": ["f10", "kp"],
+      "grid_axes": [
+        "f10",
+        "kp"
+      ],
       "file": "ic_table.icbin"
+    }
+  },
+  "decoder": {
+    "kind": "coae",
+    "params": {
+      "decode_batch_size": 120,
+      "stages": [
+        {
+          "backends": {
+            "onnx": "coae_decoder.onnx"
+          },
+          "stats": "stats_cae.bin",
+          "alt_start": 0,
+          "alt_end": 45
+        }
+      ]
     }
   },
   "stacked_ensemble": {
     "seq_len": 3,
-    "decode_batch_size": 120,
     "base_models": [
       {
         "file": "base_model_00.onnx",
@@ -45,16 +63,6 @@
     "meta_model": {
       "file": "meta_model.onnx",
       "backend": "onnx"
-    },
-    "decoders": [
-      {
-        "backends": {
-          "onnx": "coae_decoder.onnx"
-        },
-        "stats": "stats_cae.bin",
-        "alt_start": 0,
-        "alt_end": 45
-      }
-    ]
+    }
   }
 }

@@ -29,11 +29,9 @@ struct DecoderStageSpec {
 };
 
 struct StackedEnsembleSpec {
-    int seq_len           = 0;
-    int decode_batch_size = 0;
-    std::vector<BaseModelSpec>    base_models;
-    MetaModelSpec                 meta_model;
-    std::vector<DecoderStageSpec> decoders;
+    int seq_len = 0;
+    std::vector<BaseModelSpec> base_models;
+    MetaModelSpec              meta_model;
 };
 
 struct RuntimeRequirements {
@@ -73,6 +71,15 @@ struct ModelManifest {
 
     // manifest.ic.params.grid_axes.
     std::vector<std::string> ic_grid_axes;
+
+    // manifest.decoder.kind. Not validated here — see forecast::make_decoder().
+    std::string decoder_kind;
+
+    // manifest.decoder.params.stages, manifest.decoder.params.decode_batch_size.
+    // Parsed unconditionally regardless of decoder_kind's value (only one decoder
+    // kind exists today) — same known limitation as ic_grid_axes vs ic_kind.
+    std::vector<DecoderStageSpec> decoder_stages;
+    int                           decode_batch_size = 0;
 
     // Present iff kind == "stacked_ensemble".
     std::optional<StackedEnsembleSpec> stacked_ensemble;

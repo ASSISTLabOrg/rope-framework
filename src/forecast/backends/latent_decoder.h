@@ -8,20 +8,20 @@
 
 #include "rope/core/types.h"
 #include "rope/io/stats.h"
-#include "backends/model_interface.h"
+#include "model_interface.h"
 
 namespace rope::forecast {
 
 class LatentDecoder {
 public:
-    LatentDecoder(IModel&                    decoder_model,
-                  const io::CAEDenormalizer& cae_denorm,
-                  int                        batch_size,
-                  int                        n_alt,
-                  int                        n_lst,
-                  int                        n_lat)
+    LatentDecoder(IModel&                     decoder_model,
+                  const io::CoaeDenormalizer& coae_denorm,
+                  int                         batch_size,
+                  int                         n_alt,
+                  int                         n_lst,
+                  int                         n_lat)
         : model_(decoder_model)
-        , denorm_(cae_denorm)
+        , denorm_(coae_denorm)
         , batch_size_(batch_size)
         , stage_voxels_(n_lst * n_lat * n_alt)
     {}
@@ -62,10 +62,10 @@ public:
     }
 
 private:
-    IModel&                    model_;
-    const io::CAEDenormalizer& denorm_;
-    int                        batch_size_;
-    int                        stage_voxels_;
+    IModel&                     model_;
+    const io::CoaeDenormalizer& denorm_;
+    int                         batch_size_;
+    int                         stage_voxels_;
 };
 
 } // namespace rope::forecast

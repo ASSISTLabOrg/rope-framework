@@ -69,10 +69,10 @@ norm.denorm_latents_inplace(float* z) // recover physical latent from normalized
 norm.denorm_latents_block(float* z, int rows) // batch version
 ```
 
-**`CAEDenormalizer`** — wraps a `Stats` for the decoder output:
+**`CoaeDenormalizer`** — wraps a `Stats` for the decoder output:
 
 ```cpp
-CAEDenormalizer dn(stats_cae);
+CoaeDenormalizer dn(stats_cae);
 dn.apply_inplace(float* data, int batch, int voxels_with_ch);
 // data[i] = 10^(data[i] * sigma[i] + mu[i])
 ```

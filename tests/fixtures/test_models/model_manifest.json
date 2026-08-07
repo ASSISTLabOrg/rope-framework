@@ -9,12 +9,30 @@
   "drivers": {
     "source": "celestrak_sw",
     "columns": [
-      { "name": "f10", "description": "F10.7 cm solar radio flux (SFU)." },
-      { "name": "kp", "description": "Kp planetary geomagnetic index (0-9 scale)." },
-      { "name": "t1", "description": "sin(2*pi*hour/24) - diurnal phase harmonic." },
-      { "name": "t2", "description": "cos(2*pi*hour/24) - diurnal phase harmonic." },
-      { "name": "t3", "description": "sin(2*pi*day_of_year/365.25) - annual phase harmonic." },
-      { "name": "t4", "description": "cos(2*pi*day_of_year/365.25) - annual phase harmonic." }
+      {
+        "name": "f10",
+        "description": "F10.7 cm solar radio flux (SFU)."
+      },
+      {
+        "name": "kp",
+        "description": "Kp planetary geomagnetic index (0-9 scale)."
+      },
+      {
+        "name": "t1",
+        "description": "sin(2*pi*hour/24) - diurnal phase harmonic."
+      },
+      {
+        "name": "t2",
+        "description": "cos(2*pi*hour/24) - diurnal phase harmonic."
+      },
+      {
+        "name": "t3",
+        "description": "sin(2*pi*day_of_year/365.25) - annual phase harmonic."
+      },
+      {
+        "name": "t4",
+        "description": "cos(2*pi*day_of_year/365.25) - annual phase harmonic."
+      }
     ]
   },
   "validated": false,
@@ -37,9 +55,25 @@
       "file": "ic_table.icbin"
     }
   },
+  "decoder": {
+    "kind": "coae",
+    "params": {
+      "decode_batch_size": 120,
+      "stages": [
+        {
+          "backends": {
+            "onnx": "coae_decoder.onnx",
+            "libtorch": "coae_decoder.pt"
+          },
+          "stats": "stats_cae.bin",
+          "alt_start": 0,
+          "alt_end": 45
+        }
+      ]
+    }
+  },
   "stacked_ensemble": {
     "seq_len": 3,
-    "decode_batch_size": 120,
     "base_models": [
       {
         "file": "base_model_00.onnx",
@@ -135,17 +169,6 @@
     "meta_model": {
       "file": "meta_model.onnx",
       "backend": "onnx"
-    },
-    "decoders": [
-      {
-        "backends": {
-          "onnx": "coae_decoder.onnx",
-          "libtorch": "coae_decoder.pt"
-        },
-        "stats": "stats_cae.bin",
-        "alt_start": 0,
-        "alt_end": 45
-      }
-    ]
+    }
   }
 }

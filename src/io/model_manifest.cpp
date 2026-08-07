@@ -163,6 +163,78 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
             "(ic_lookup_table is a 2D interpolator), got " +
             std::to_string(m.ic_grid_axes.size()) + " in " + ps);
 
+    // decoder — kind-agnostic, sibling to ic/drivers/grid, like ic's own kind/params split.
+    if (!j.contains("decoder") || !j["decoder"].is_object())
+        throw std::runtime_error(missing_field("decoder", ps));
+    const auto& jdec = j["decoder"];
+
+    if (!jdec.contains("kind") || !jdec["kind"].is_string())
+        throw std::runtime_error(missing_field("decoder.kind", ps));
+    m.decoder_kind = jdec["kind"].get<std::string>();
+    if (m.decoder_kind.empty())
+        throw std::runtime_error("ModelManifest::load: 'decoder.kind' must not be empty in " + ps);
+
+    if (!jdec.contains("params") || !jdec["params"].is_object())
+        throw std::runtime_error(missing_field("decoder.params", ps));
+    const auto& jdec_params = jdec["params"];
+
+    if (!jdec_params.contains("decode_batch_size") || !jdec_params["decode_batch_size"].is_number_integer())
+        throw std::runtime_error(missing_field("decoder.params.decode_batch_size", ps));
+    m.decode_batch_size = jdec_params["decode_batch_size"].get<int>();
+    if (m.decode_batch_size <= 0)
+        throw std::runtime_error(
+            "ModelManifest::load: 'decoder.params.decode_batch_size' must be positive in " + ps);
+
+    if (!jdec_params.contains("stages") || !jdec_params["stages"].is_array() ||
+            jdec_params["stages"].empty())
+        throw std::runtime_error(missing_field("decoder.params.stages", ps));
+    for (const auto& jd : jdec_params["stages"]) {
+        DecoderStageSpec ds;
+        if (!jd.contains("backends") || !jd["backends"].is_object())
+            throw std::runtime_error(
+                "ModelManifest::load: decoder stage missing 'backends' in " + ps);
+        for (const auto& [key, val] : jd["backends"].items()) {
+            if (!val.is_string())
+                throw std::runtime_error(
+                    "ModelManifest::load: decoder backends values must be strings in " + ps);
+            ds.backends[key] = val.get<std::string>();
+        }
+        if (ds.backends.empty())
+            throw std::runtime_error(
+                "ModelManifest::load: decoder 'backends' must not be empty in " + ps);
+        if (!jd.contains("stats") || !jd["stats"].is_string())
+            throw std::runtime_error(
+                "ModelManifest::load: decoder stage missing 'stats' in " + ps);
+        ds.stats = jd["stats"].get<std::string>();
+        if (!jd.contains("alt_start") || !jd["alt_start"].is_number_integer())
+            throw std::runtime_error(
+                "ModelManifest::load: decoder stage missing 'alt_start' in " + ps);
+        ds.alt_start = jd["alt_start"].get<int>();
+        if (!jd.contains("alt_end") || !jd["alt_end"].is_number_integer())
+            throw std::runtime_error(
+                "ModelManifest::load: decoder stage missing 'alt_end' in " + ps);
+        ds.alt_end = jd["alt_end"].get<int>();
+        m.decoder_stages.push_back(std::move(ds));
+    }
+
+    // Validate decoder altitude ranges: sort by alt_start, verify exact tiling of [0, grid.n_alt).
+    std::sort(m.decoder_stages.begin(), m.decoder_stages.end(),
+        [](const DecoderStageSpec& a, const DecoderStageSpec& b) {
+            return a.alt_start < b.alt_start;
+        });
+    if (m.decoder_stages.front().alt_start != 0)
+        throw std::runtime_error(
+            "ModelManifest::load: first decoder must have alt_start=0 in " + ps);
+    for (std::size_t i = 1; i < m.decoder_stages.size(); ++i) {
+        if (m.decoder_stages[i].alt_start != m.decoder_stages[i - 1].alt_end)
+            throw std::runtime_error(
+                "ModelManifest::load: decoder altitude ranges have a gap or overlap in " + ps);
+    }
+    if (m.decoder_stages.back().alt_end != m.grid.n_alt)
+        throw std::runtime_error(
+            "ModelManifest::load: last decoder must have alt_end=" +
+            std::to_string(m.grid.n_alt) + " in " + ps);
+
     // Kind-specific block
     if (!j.contains("stacked_ensemble") || !j["stacked_ensemble"].is_object())
         throw std::runtime_error(missing_field("stacked_ensemble", ps));
@@ -176,13 +248,6 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
     if (spec.seq_len <= 0)
         throw std::runtime_error(
             "ModelManifest::load: 'seq_len' must be positive in " + ps);
-
-    if (!jk.contains("decode_batch_size") || !jk["decode_batch_size"].is_number_integer())
-        throw std::runtime_error(missing_field("stacked_ensemble.decode_batch_size", ps));
-    spec.decode_batch_size = jk["decode_batch_size"].get<int>();
-    if (spec.decode_batch_size <= 0)
-        throw std::runtime_error(
-            "ModelManifest::load: 'decode_batch_size' must be positive in " + ps);
 
     // base_models
     if (!jk.contains("base_models") || !jk["base_models"].is_array() ||
@@ -218,56 +283,6 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
         spec.meta_model.backend = jmm["backend"].get<std::string>();
     }
 
-    // decoders
-    if (!jk.contains("decoders") || !jk["decoders"].is_array() || jk["decoders"].empty())
-        throw std::runtime_error(missing_field("stacked_ensemble.decoders", ps));
-    for (const auto& jd : jk["decoders"]) {
-        DecoderStageSpec ds;
-        if (!jd.contains("backends") || !jd["backends"].is_object())
-            throw std::runtime_error(
-                "ModelManifest::load: decoder stage missing 'backends' in " + ps);
-        for (const auto& [key, val] : jd["backends"].items()) {
-            if (!val.is_string())
-                throw std::runtime_error(
-                    "ModelManifest::load: decoder backends values must be strings in " + ps);
-            ds.backends[key] = val.get<std::string>();
-        }
-        if (ds.backends.empty())
-            throw std::runtime_error(
-                "ModelManifest::load: decoder 'backends' must not be empty in " + ps);
-        if (!jd.contains("stats") || !jd["stats"].is_string())
-            throw std::runtime_error(
-                "ModelManifest::load: decoder stage missing 'stats' in " + ps);
-        ds.stats = jd["stats"].get<std::string>();
-        if (!jd.contains("alt_start") || !jd["alt_start"].is_number_integer())
-            throw std::runtime_error(
-                "ModelManifest::load: decoder stage missing 'alt_start' in " + ps);
-        ds.alt_start = jd["alt_start"].get<int>();
-        if (!jd.contains("alt_end") || !jd["alt_end"].is_number_integer())
-            throw std::runtime_error(
-                "ModelManifest::load: decoder stage missing 'alt_end' in " + ps);
-        ds.alt_end = jd["alt_end"].get<int>();
-        spec.decoders.push_back(std::move(ds));
-    }
-
-    // Validate decoder altitude ranges: sort by alt_start, verify exact tiling of [0, grid.n_alt).
-    std::sort(spec.decoders.begin(), spec.decoders.end(),
-        [](const DecoderStageSpec& a, const DecoderStageSpec& b) {
-            return a.alt_start < b.alt_start;
-        });
-    if (spec.decoders.front().alt_start != 0)
-        throw std::runtime_error(
-            "ModelManifest::load: first decoder must have alt_start=0 in " + ps);
-    for (std::size_t i = 1; i < spec.decoders.size(); ++i) {
-        if (spec.decoders[i].alt_start != spec.decoders[i - 1].alt_end)
-            throw std::runtime_error(
-                "ModelManifest::load: decoder altitude ranges have a gap or overlap in " + ps);
-    }
-    if (spec.decoders.back().alt_end != m.grid.n_alt)
-        throw std::runtime_error(
-            "ModelManifest::load: last decoder must have alt_end=" +
-            std::to_string(m.grid.n_alt) + " in " + ps);
-
     m.stacked_ensemble = std::move(spec);
 
     // Cross-check: every backend referenced must have a version in runtime_requirements.
@@ -275,7 +290,7 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
     for (const auto& bm : m.stacked_ensemble->base_models)
         used_backends.insert(bm.backend);
     used_backends.insert(m.stacked_ensemble->meta_model.backend);
-    for (const auto& ds : m.stacked_ensemble->decoders)
+    for (const auto& ds : m.decoder_stages)
         for (const auto& [b, _] : ds.backends)
             used_backends.insert(b);
 
