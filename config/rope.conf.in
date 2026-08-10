@@ -69,3 +69,14 @@ intra_threads_decoder = 0
 # device = cuda      Run decoder on the first available GPU
 # device = cuda:0    Explicit GPU index
 device = @ROPE_DECODER_DEVICE@
+
+# ---------------------------------------------------------------------------
+[interpolation]
+# ---------------------------------------------------------------------------
+
+# Set to false to throw instead of extrapolating past the grid's alt_max_km
+extrapolate_altitude = true
+
+# Number of grid altitude bins nearest alt_max_km used to fit the local
+# log-linear slope for extrapolating past it (see docs/interpolation.md)
+n_etp_pts = 8

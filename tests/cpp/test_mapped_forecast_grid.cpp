@@ -73,8 +73,10 @@ TEST_CASE("MappedForecastGrid: interpolates identically to the vector-backed gri
     ForecastGridBin::save(grid, path);
     auto mapped = MappedForecastGrid::open(path);
 
-    GridInterpolator<ForecastGrid>        gi_vec(grid);
-    GridInterpolator<MappedForecastGrid>  gi_map(mapped);
+    // small_shape() has n_alt=5, below the default n_etp_pts=8 -- pass an explicit value that fits.
+    rope::interpolate::ExtrapolationOptions small_grid_opts{true, 2};
+    GridInterpolator<ForecastGrid>        gi_vec(grid, small_grid_opts);
+    GridInterpolator<MappedForecastGrid>  gi_map(mapped, small_grid_opts);
 
     auto r_vec = gi_vec.query_interp(grid.times[0], 6.0, 0.0, 300.0);
     auto r_map = gi_map.query_interp(grid.times[0], 6.0, 0.0, 300.0);

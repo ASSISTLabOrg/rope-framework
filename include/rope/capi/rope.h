@@ -19,7 +19,7 @@ ROPE_API rope_interp_t* rope_open(const char* cache_path,
                                    char*       err_buf,
                                    int         err_len);
 
-/* Queries density/uncertainty (kg/m³) at one point: time_unix (UTC seconds), lst [0,24), lat/alt_km within grid range. Returns ROPE_OK or an error code. */
+/* Queries density/uncertainty (kg/m³) at one point: time_unix (UTC seconds), lst [0,24), lat within [-90,90] (polar-cap blend beyond the grid's own range), alt_km within grid range. Returns ROPE_OK or an error code. */
 ROPE_API int rope_query(rope_interp_t* interp,
                          int            mode,
                          double         time_unix,
@@ -44,14 +44,17 @@ ROPE_API int rope_query_batch(rope_interp_t* interp,
                                char*          err_buf,
                                int            err_len);
 
+/* Reconfigures altitude extrapolation on an open handle (n_etp_pts<=0 leaves it unchanged); not safe to call concurrently with rope_query/rope_query_batch on the same handle. */
+ROPE_API int rope_set_extrapolation(rope_interp_t* interp,
+                                     int            extrapolate_altitude,
+                                     int            n_etp_pts,
+                                     char*          err_buf,
+                                     int            err_len);
+
 /* Releases the handle (unmaps the cache file). Safe to call with NULL. */
 ROPE_API void rope_close(rope_interp_t* interp);
 
-/* Writes a NUL-terminated JSON summary of exported_dir/model_manifest.json into buf
-   (kind, latent_dim, grid, validated, ic.{kind,axes}, drivers.{source,columns}).
-   Does not require an open rope_interp_t -- reads the manifest directly, independent
-   of any cached forecast. Returns ROPE_OK, or ROPE_ERR_BUFFER_TOO_SMALL if buf_len is
-   too small for the summary (never silently truncates). */
+/* Writes a NUL-terminated JSON summary of exported_dir/model_manifest.json into buf; does not require an open rope_interp_t or a cached forecast; returns ROPE_ERR_BUFFER_TOO_SMALL (never silently truncates) if buf_len is too small. */
 ROPE_API int rope_get_manifest_info(const char* exported_dir,
                                      char*       buf,
                                      int         buf_len,

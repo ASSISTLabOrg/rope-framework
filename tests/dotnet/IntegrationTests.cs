@@ -315,6 +315,141 @@ public class IntegrationTests
         rope.Dispose();  // second Dispose must not throw
     }
 
+    // ── Altitude extrapolation (CLI) ────────────────────────────────────────
+
+    [Fact]
+    public void Get_altitude_extrapolation_default_on_succeeds()
+    {
+        if (!_srv.Available) return;
+
+        int rc = ForecastFixture.RunCli(_srv.ExePath, _srv.CachePath, _srv.ConfPath,
+            "get", "--mode", "interp",
+            "--time", "2024-01-01T01:00:00",
+            "--lst", "12.0", "--lat", "45.0", "--alt", "1200.0");
+
+        Assert.Equal(0, rc);
+    }
+
+    [Fact]
+    public void Get_no_extrapolate_altitude_flag_fails()
+    {
+        if (!_srv.Available) return;
+
+        int rc = ForecastFixture.RunCli(_srv.ExePath, _srv.CachePath, _srv.ConfPath,
+            "get", "--mode", "interp", "--no-extrapolate-altitude",
+            "--time", "2024-01-01T01:00:00",
+            "--lst", "12.0", "--lat", "45.0", "--alt", "1200.0");
+
+        Assert.NotEqual(0, rc);
+    }
+
+    [Fact]
+    public void Get_altitude_hard_ceiling_fails()
+    {
+        if (!_srv.Available) return;
+
+        int rc = ForecastFixture.RunCli(_srv.ExePath, _srv.CachePath, _srv.ConfPath,
+            "get", "--mode", "interp",
+            "--time", "2024-01-01T01:00:00",
+            "--lst", "12.0", "--lat", "45.0", "--alt", "2500.0");
+
+        Assert.NotEqual(0, rc);
+    }
+
+    [Fact]
+    public void Get_n_etp_pts_flag_accepted()
+    {
+        if (!_srv.Available) return;
+
+        int rc = ForecastFixture.RunCli(_srv.ExePath, _srv.CachePath, _srv.ConfPath,
+            "get", "--mode", "interp", "--n-etp-pts", "4",
+            "--time", "2024-01-01T01:00:00",
+            "--lst", "12.0", "--lat", "45.0", "--alt", "1200.0");
+
+        Assert.Equal(0, rc);
+    }
+
+    [Fact]
+    public void Get_n_etp_pts_out_of_range_fails()
+    {
+        if (!_srv.Available) return;
+
+        int rc = ForecastFixture.RunCli(_srv.ExePath, _srv.CachePath, _srv.ConfPath,
+            "get", "--mode", "interp", "--n-etp-pts", "1000",
+            "--time", "2024-01-01T01:00:00",
+            "--lst", "12.0", "--lat", "45.0", "--alt", "1200.0");
+
+        Assert.NotEqual(0, rc);
+    }
+
+    [Fact]
+    public void Get_config_interpolation_section_disables_extrapolation()
+    {
+        if (!_srv.Available) return;
+
+        string fixtureDir = Environment.GetEnvironmentVariable("ROPE_FIXTURE_DIR") ?? "";
+        string testModels = Path.Combine(fixtureDir, "test_models");
+        string swBin      = Path.Combine(testModels,  "sw_test.swbin");
+        string conf       = Path.Combine(Path.GetTempPath(), $"rope_cs_noextrap_{Path.GetRandomFileName()}.conf");
+        File.WriteAllText(conf,
+            $"[paths]{Environment.NewLine}" +
+            $"exported_dir = {testModels}{Environment.NewLine}" +
+            $"driver_path  = {swBin}{Environment.NewLine}" +
+            $"[interpolation]{Environment.NewLine}" +
+            $"extrapolate_altitude = false{Environment.NewLine}");
+        try
+        {
+            int rc = ForecastFixture.RunCli(_srv.ExePath, _srv.CachePath, conf,
+                "get", "--mode", "interp",
+                "--time", "2024-01-01T01:00:00",
+                "--lst", "12.0", "--lat", "45.0", "--alt", "1200.0");
+
+            Assert.NotEqual(0, rc);
+        }
+        finally
+        {
+            try { File.Delete(conf); } catch { }
+        }
+    }
+
+    // ── SetExtrapolation (binding) ──────────────────────────────────────────
+
+    [Fact]
+    public void SetExtrapolation_disables_then_reenables()
+    {
+        if (!_srv.Available) return;
+
+        using var rope = new Rope(
+            libPath: _srv.LibPath, exePath: _srv.ExePath,
+            cachePath: _srv.CachePath);
+
+        rope.Open();
+
+        var r1 = rope.Get(ForecastFixture.QueryTime, lst: 12.0, lat: 45.0, altKm: 1200.0);
+        Assert.True(r1.Density > 0);
+
+        rope.SetExtrapolation(extrapolateAltitude: false);
+        Assert.Throws<RopeException>(
+            () => rope.Get(ForecastFixture.QueryTime, lst: 12.0, lat: 45.0, altKm: 1200.0));
+
+        rope.SetExtrapolation(extrapolateAltitude: true, nEtpPts: 4);
+        var r2 = rope.Get(ForecastFixture.QueryTime, lst: 12.0, lat: 45.0, altKm: 1200.0);
+        Assert.True(r2.Density > 0);
+    }
+
+    [Fact]
+    public void Constructor_extrapolateAltitude_false_applies_on_open()
+    {
+        if (!_srv.Available) return;
+
+        using var rope = new Rope(
+            libPath: _srv.LibPath, exePath: _srv.ExePath,
+            cachePath: _srv.CachePath, extrapolateAltitude: false);
+
+        Assert.Throws<RopeException>(
+            () => rope.Get(ForecastFixture.QueryTime, lst: 12.0, lat: 45.0, altKm: 1200.0));
+    }
+
     // ── Discard-on-reforecast invariant ─────────────────────────────────────
 
     [Fact]

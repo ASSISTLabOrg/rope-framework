@@ -12,6 +12,7 @@
 // Commands:
 //   rope forecast --start <ISO8601> --horizon <h> [--config <path>] [--driver <path>]
 //   rope get      --mode hold|interp --time <ISO8601> --lst <f> --lat <f> --alt <f>
+//                 [--config <path>] [--no-extrapolate-altitude] [--n-etp-pts <N>]
 //   rope get      --mode hold|interp --file <csv> [--output <path>]
 //   rope manifest [--config <path>] [--json]
 //
@@ -165,8 +166,10 @@ int main(int argc, char** argv) {
     // ---- get subcommand ----
     auto* gc = app.add_subcommand("get",
                                    "Query the cached forecast grid");
-    std::string gc_mode, gc_time, gc_file, gc_output;
+    std::string gc_mode, gc_time, gc_file, gc_output, gc_config;
     double      gc_lst = 0, gc_lat = 0, gc_alt = 0;
+    bool        gc_no_extrapolate_alt = false;
+    int         gc_n_etp_pts = 0;
     gc->add_option("--mode", gc_mode, "hold or interp")->required();
     gc->add_option("--time", gc_time, "Query time (ISO 8601, UTC)");
     gc->add_option("--lst",  gc_lst,  "Local Solar Time [hours]");
@@ -174,6 +177,12 @@ int main(int argc, char** argv) {
     gc->add_option("--alt",  gc_alt,  "Altitude [km]");
     gc->add_option("--file", gc_file, "Batch CSV input (replaces point flags)");
     gc->add_option("--output", gc_output, "Output file for --file results");
+    gc->add_option("--config", gc_config,
+                   "Config file path (optional; only [interpolation] settings apply)");
+    gc->add_flag("--no-extrapolate-altitude", gc_no_extrapolate_alt,
+                 "Disable log-linear extrapolation past the grid's alt_max_km");
+    gc->add_option("--n-etp-pts", gc_n_etp_pts,
+                   "Altitude bins used to fit the extrapolation slope (<=0 = use config/default)");
 
     // ---- convert-sw subcommand ----
     auto* sw = app.add_subcommand("convert-sw",
@@ -346,7 +355,21 @@ int main(int argc, char** argv) {
     if (gc->parsed()) {
         try {
             rope::io::MappedForecastGrid grid = rope::io::MappedForecastGrid::open(cache_path);
-            rope::interpolate::GridInterpolator<rope::io::MappedForecastGrid> interp{grid};
+
+            // --config is optional here (unlike forecast/manifest): 'rope get' has never
+            // required a config file, so only read one if explicitly given or the default exists.
+            rope::interpolate::ExtrapolationOptions etp_opts;
+            fs::path gc_config_path = gc_config.empty() ? default_config(exe_path()) : fs::path{gc_config};
+            if (!gc_config.empty() || fs::exists(gc_config_path)) {
+                rope::io::ConfigReader config{gc_config_path};
+                etp_opts = rope::interpolate::options_from_reader(config);
+            }
+            if (gc_no_extrapolate_alt)
+                etp_opts.extrapolate_altitude = false;
+            if (gc_n_etp_pts > 0)
+                etp_opts.n_etp_pts = gc_n_etp_pts;
+
+            rope::interpolate::GridInterpolator<rope::io::MappedForecastGrid> interp{grid, etp_opts};
 
             if (!gc_file.empty()) {
                 return run_batch_get(interp, gc_mode,

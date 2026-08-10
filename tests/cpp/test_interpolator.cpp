@@ -5,10 +5,12 @@
 #include "rope/core/datetime.h"
 #include <vector>
 #include <cmath>
+#include <stdexcept>
 
 using namespace Catch::Matchers;
 using rope::ForecastGrid;
 using rope::GridSpec;
+using rope::interpolate::ExtrapolationOptions;
 using rope::interpolate::GridInterpolator;
 using rope::interpolate::SpatialOutOfRangeError;
 using rope::interpolate::TimeOutOfRangeError;
@@ -116,18 +118,135 @@ TEST_CASE("GridInterpolator: LST is periodic - query at 25h equals query at 1h")
     CHECK_THAT(r1.uncertainty, WithinRel(r25.uncertainty, 1e-9));
 }
 
-TEST_CASE("GridInterpolator: out-of-range latitude throws") {
+TEST_CASE("GridInterpolator: latitude beyond +/-90 throws") {
     auto grid = make_uniform_grid();
     GridInterpolator gi(grid);
-    REQUIRE_THROWS_AS(gi.query_interp(epoch_h(0), 12.0,  90.0, 400.0), SpatialOutOfRangeError);
-    REQUIRE_THROWS_AS(gi.query_interp(epoch_h(0), 12.0, -90.0, 400.0), SpatialOutOfRangeError);
+    REQUIRE_THROWS_AS(gi.query_interp(epoch_h(0), 12.0,  90.5, 400.0), SpatialOutOfRangeError);
+    REQUIRE_THROWS_AS(gi.query_interp(epoch_h(0), 12.0, -90.5, 400.0), SpatialOutOfRangeError);
 }
 
-TEST_CASE("GridInterpolator: out-of-range altitude throws") {
+TEST_CASE("GridInterpolator: latitude between lat_max_deg and 90 no longer throws") {
+    // test_shape() covers [-87.5, 87.5]; 87.5..90 and -90..-87.5 are the polar-cap bands.
     auto grid = make_uniform_grid();
     GridInterpolator gi(grid);
-    REQUIRE_THROWS_AS(gi.query_interp(epoch_h(0), 12.0, 0.0,  50.0), SpatialOutOfRangeError);
+    for (double lat : {87.6, 89.0, 90.0, -87.6, -89.0, -90.0}) {
+        auto r = gi.query_interp(epoch_h(0), 12.0, lat, 400.0);
+        CHECK(r.density     > 0.0);
+        CHECK(r.uncertainty > 0.0);
+    }
+}
+
+TEST_CASE("GridInterpolator: value at the pole is the LST geometric mean of the boundary row") {
+    auto shape = test_shape();
+    ForecastGrid g;
+    g.shape = shape;
+    g.H = 1;
+    g.density.assign(shape.voxels(), 1.0f);
+    g.uncertainty.assign(shape.voxels(), 1.0f);
+    g.times = {epoch_h(0)};
+
+    // Boundary rows (ai=0 south, ai=n_lat-1 north) alternate 10 / 1000 across LST at every
+    // altitude; the geometric mean of alternating 10/1000 over an even count is sqrt(10*1000)=100.
+    for (int a : {0, shape.n_lat - 1}) {
+        for (int l = 0; l < shape.n_lst; ++l) {
+            for (int z = 0; z < shape.n_alt; ++z) {
+                std::size_t idx = static_cast<std::size_t>(l) * (shape.n_lat * shape.n_alt)
+                                 + static_cast<std::size_t>(a) * shape.n_alt + z;
+                g.density[idx] = (l % 2 == 0) ? 10.0f : 1000.0f;
+            }
+        }
+    }
+
+    GridInterpolator gi(g);
+    for (double pole : {90.0, -90.0}) {
+        auto r_noon = gi.query_interp(epoch_h(0), 12.0, pole, 400.0);
+        auto r_dawn = gi.query_interp(epoch_h(0),  6.0, pole, 400.0);
+        CHECK_THAT(r_noon.density, WithinRel(100.0, 1e-3));
+        // Independent of LST: querying the pole at two different LSTs must agree exactly.
+        CHECK_THAT(r_noon.density, WithinRel(r_dawn.density, 1e-9));
+    }
+}
+
+TEST_CASE("GridInterpolator: altitude below alt_min_km always throws") {
+    // The floor is hard regardless of the extrapolation toggle.
+    auto grid = make_uniform_grid();
+    GridInterpolator gi(grid);
+    REQUIRE_THROWS_AS(gi.query_interp(epoch_h(0), 12.0, 0.0, 50.0), SpatialOutOfRangeError);
+
+    GridInterpolator gi_off(grid, ExtrapolationOptions{false, 8});
+    REQUIRE_THROWS_AS(gi_off.query_interp(epoch_h(0), 12.0, 0.0, 50.0), SpatialOutOfRangeError);
+}
+
+TEST_CASE("GridInterpolator: altitude past alt_max_km extrapolates by default") {
+    // test_shape() covers alt [100, 980]; 990 is past the boundary but under the 2000 km ceiling.
+    auto grid = make_uniform_grid();
+    GridInterpolator gi(grid);
+    auto r = gi.query_interp(epoch_h(0), 12.0, 0.0, 990.0);
+    CHECK(r.density     > 0.0);
+    CHECK(r.uncertainty > 0.0);
+}
+
+TEST_CASE("GridInterpolator: altitude extrapolation can be disabled") {
+    auto grid = make_uniform_grid();
+    GridInterpolator gi(grid, ExtrapolationOptions{false, 8});
     REQUIRE_THROWS_AS(gi.query_interp(epoch_h(0), 12.0, 0.0, 990.0), SpatialOutOfRangeError);
+}
+
+TEST_CASE("GridInterpolator: altitude extrapolation ceiling at 2000 km is not configurable") {
+    auto grid = make_uniform_grid();
+    GridInterpolator gi(grid);
+    CHECK_NOTHROW(gi.query_interp(epoch_h(0), 12.0, 0.0, 2000.0));
+    REQUIRE_THROWS_AS(gi.query_interp(epoch_h(0), 12.0, 0.0, 2000.5), SpatialOutOfRangeError);
+}
+
+TEST_CASE("GridInterpolator: n_etp_pts validation") {
+    auto grid = make_uniform_grid();  // test_shape(): n_alt = 45
+    REQUIRE_THROWS_AS(GridInterpolator(grid, ExtrapolationOptions{true, 1}), std::invalid_argument);
+    REQUIRE_THROWS_AS(GridInterpolator(grid, ExtrapolationOptions{true, 46}), std::invalid_argument);
+
+    GridInterpolator gi(grid);
+    REQUIRE_THROWS_AS(gi.set_extrapolation_options(ExtrapolationOptions{true, 1}), std::invalid_argument);
+    REQUIRE_THROWS_AS(gi.set_extrapolation_options(ExtrapolationOptions{true, 46}), std::invalid_argument);
+}
+
+TEST_CASE("GridInterpolator: extrapolated density is continuous with the in-grid value at the boundary") {
+    auto grid = make_uniform_grid();
+    GridInterpolator gi(grid);
+    auto r_boundary = gi.query_interp(epoch_h(0), 12.0, 0.0, 980.0);
+    auto r_just_past = gi.query_interp(epoch_h(0), 12.0, 0.0, 980.5);
+    CHECK_THAT(r_just_past.density, WithinRel(r_boundary.density, 1e-2));
+}
+
+TEST_CASE("GridInterpolator: extrapolation composes with the polar cap") {
+    // lat in the polar-cap band AND alt past alt_max_km, simultaneously -- the case the
+    // real-column slope_/intercept_ arrays don't cover; must use the pole's own fit.
+    auto shape = test_shape();
+    ForecastGrid g;
+    g.shape = shape;
+    g.H = 1;
+    g.density.assign(shape.voxels(), 1.0f);
+    g.uncertainty.assign(shape.voxels(), 1.0f);
+    g.times = {epoch_h(0)};
+
+    // Make the top few altitude rows at the north boundary decrease by 10x per step, alternating
+    // 10/1000 across LST like the geometric-mean test above, so the pole fit is non-trivial.
+    for (int a : {0, shape.n_lat - 1}) {
+        for (int l = 0; l < shape.n_lst; ++l) {
+            for (int z = shape.n_alt - 3; z < shape.n_alt; ++z) {
+                std::size_t idx = static_cast<std::size_t>(l) * (shape.n_lat * shape.n_alt)
+                                 + static_cast<std::size_t>(a) * shape.n_alt + z;
+                float base = (l % 2 == 0) ? 10.0f : 1000.0f;
+                g.density[idx] = base / std::pow(10.0f, static_cast<float>(shape.n_alt - 1 - z));
+            }
+        }
+    }
+
+    GridInterpolator gi(g);
+    auto r_noon = gi.query_interp(epoch_h(0), 12.0, 90.0, 1200.0);
+    auto r_dawn = gi.query_interp(epoch_h(0),  6.0, 90.0, 1200.0);
+    CHECK(r_noon.density > 0.0);
+    // Still LST-invariant at the pole even while extrapolating past alt_max_km.
+    CHECK_THAT(r_noon.density, WithinRel(r_dawn.density, 1e-6));
 }
 
 TEST_CASE("GridInterpolator: out-of-range time throws") {

@@ -185,6 +185,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(rope_interpolate STATIC
     src/interpolate/grid_interpolator.cpp
+    src/interpolate/config.cpp
 )
 target_link_libraries(rope_interpolate PUBLIC rope_core rope_io)
 

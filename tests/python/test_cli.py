@@ -349,6 +349,119 @@ def test_batch_get_from_csv(forecast_cache, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# get — altitude extrapolation
+# ---------------------------------------------------------------------------
+
+def test_get_altitude_extrapolation_default_on_succeeds(forecast_cache):
+    result = forecast_cache.run(
+        "get", "--mode", "interp",
+        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "1200.0",
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["density"]     > 0
+    assert data["uncertainty"] >= 0
+
+
+def test_get_altitude_extrapolation_disabled_fails(forecast_cache):
+    result = forecast_cache.run(
+        "get", "--mode", "interp", "--no-extrapolate-altitude",
+        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "1200.0",
+        timeout=10,
+    )
+    assert result.returncode != 0
+
+
+def test_get_altitude_extrapolation_hard_ceiling_fails(forecast_cache):
+    result = forecast_cache.run(
+        "get", "--mode", "interp",
+        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "2500.0",
+        timeout=10,
+    )
+    assert result.returncode != 0
+
+
+def test_get_altitude_n_etp_pts_flag_accepted(forecast_cache):
+    result = forecast_cache.run(
+        "get", "--mode", "interp", "--n-etp-pts", "4",
+        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "1200.0",
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["density"] > 0
+
+
+def test_get_n_etp_pts_out_of_range_fails(forecast_cache):
+    result = forecast_cache.run(
+        "get", "--mode", "interp", "--n-etp-pts", "1000",
+        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "1200.0",
+        timeout=10,
+    )
+    assert result.returncode != 0
+
+
+def test_get_config_interpolation_section_disables_extrapolation(forecast_cache, tmp_path):
+    conf = tmp_path / "rope_no_extrap.conf"
+    _write_conf(conf)
+    with open(conf, "a") as f:
+        f.write("\n[interpolation]\nextrapolate_altitude = false\n")
+
+    result = forecast_cache.run(
+        "get", "--mode", "interp", "--config", str(conf),
+        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "1200.0",
+        timeout=10,
+    )
+    assert result.returncode != 0
+
+
+def test_get_cli_flag_overrides_config(forecast_cache, tmp_path):
+    # Config leaves extrapolation on (the default); --no-extrapolate-altitude must still win.
+    conf = tmp_path / "rope_extrap_on.conf"
+    _write_conf(conf)
+    with open(conf, "a") as f:
+        f.write("\n[interpolation]\nextrapolate_altitude = true\n")
+
+    result = forecast_cache.run(
+        "get", "--mode", "interp", "--config", str(conf), "--no-extrapolate-altitude",
+        "--time", QUERY_TIME, "--lst", "12.0", "--lat", "45.0", "--alt", "1200.0",
+        timeout=10,
+    )
+    assert result.returncode != 0
+
+
+# ---------------------------------------------------------------------------
+# get — altitude extrapolation (via Python binding)
+# ---------------------------------------------------------------------------
+
+def test_rope_binding_set_extrapolation(forecast_cache):
+    sys.path.insert(0, str(_project_root / "python"))
+    from rope import Rope, RopeError
+
+    r = Rope(lib_path=Path(ROPE_LIB), cache_path=forecast_cache.cache_path)
+    with r:
+        result = r.get(time=QUERY_TIME, lst=12.0, lat=45.0, alt_km=1200.0)
+        assert result["density"] > 0
+
+        r.set_extrapolation(extrapolate_altitude=False)
+        with pytest.raises(RopeError):
+            r.get(time=QUERY_TIME, lst=12.0, lat=45.0, alt_km=1200.0)
+
+        r.set_extrapolation(extrapolate_altitude=True, n_etp_pts=4)
+        result = r.get(time=QUERY_TIME, lst=12.0, lat=45.0, alt_km=1200.0)
+        assert result["density"] > 0
+
+
+def test_rope_binding_constructor_extrapolation_params(forecast_cache):
+    sys.path.insert(0, str(_project_root / "python"))
+    from rope import Rope, RopeError
+
+    r = Rope(lib_path=Path(ROPE_LIB), cache_path=forecast_cache.cache_path,
+             extrapolate_altitude=False)
+    with r:
+        with pytest.raises(RopeError):
+            r.get(time=QUERY_TIME, lst=12.0, lat=45.0, alt_km=1200.0)
+
+
+# ---------------------------------------------------------------------------
 # Discard-on-reforecast invariant
 # ---------------------------------------------------------------------------
 

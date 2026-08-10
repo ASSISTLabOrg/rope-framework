@@ -16,6 +16,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 // ---------------------------------------------------------------------------
@@ -152,6 +153,37 @@ int rope_query_batch(rope_interp_t* interp,
         return classify_exception(&e);
     } catch (...) {
         fill_err(err_buf, err_len, "rope_query_batch: unknown error");
+        return ROPE_ERR_INTERNAL;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// rope_set_extrapolation
+// ---------------------------------------------------------------------------
+
+int rope_set_extrapolation(rope_interp_t* interp,
+                           int extrapolate_altitude,
+                           int n_etp_pts,
+                           char* err_buf, int err_len) {
+    if (!interp) {
+        fill_err(err_buf, err_len, "rope_set_extrapolation: NULL argument");
+        return ROPE_ERR_BAD_ARG;
+    }
+    try {
+        auto opts = interp->interp.extrapolation_options();
+        opts.extrapolate_altitude = extrapolate_altitude != 0;
+        if (n_etp_pts > 0)
+            opts.n_etp_pts = n_etp_pts;
+        interp->interp.set_extrapolation_options(opts);
+        return ROPE_OK;
+    } catch (const std::invalid_argument& e) {
+        fill_err(err_buf, err_len, e.what());
+        return ROPE_ERR_BAD_ARG;
+    } catch (const std::exception& e) {
+        fill_err(err_buf, err_len, e.what());
+        return classify_exception(&e);
+    } catch (...) {
+        fill_err(err_buf, err_len, "rope_set_extrapolation: unknown error");
         return ROPE_ERR_INTERNAL;
     }
 }

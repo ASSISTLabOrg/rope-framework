@@ -108,6 +108,11 @@ namespace RopeFramework
             byte* errBuf, int errLen);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int RopeSetExtrapolationFn(
+            IntPtr interp, int extrapolateAltitude, int nEtpPts,
+            byte* errBuf, int errLen);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void RopeCloseFn(IntPtr interp);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -122,12 +127,15 @@ namespace RopeFramework
         private readonly RopeOpenFn        _ropeOpen;
         private readonly RopeQueryFn       _ropeQuery;
         private readonly RopeQueryBatchFn  _ropeQueryBatch;
+        private readonly RopeSetExtrapolationFn _ropeSetExtrapolation;
         private readonly RopeCloseFn       _ropeClose;
         private readonly RopeGetManifestInfoFn _ropeGetManifestInfo;
 
         private readonly string _cachePath;
         private readonly string _exePath;
         private readonly string _configPath;
+        private readonly bool?  _extrapolateAltitude;
+        private readonly int?   _nEtpPts;
         private IntPtr _handle;
         private bool   _disposed;
 
@@ -151,11 +159,22 @@ namespace RopeFramework
         /// <param name="configPath">
         ///   Path to rope.conf. Defaults to config/rope.conf in the package root.
         /// </param>
+        /// <param name="extrapolateAltitude">
+        ///   Enable/disable log-linear extrapolation past alt_max_km. Null (default)
+        ///   leaves the library default (on) in place. Applied automatically on Open();
+        ///   see SetExtrapolation().
+        /// </param>
+        /// <param name="nEtpPts">
+        ///   Altitude bins used to fit the extrapolation slope. Null (default) leaves
+        ///   the library default (8) in place.
+        /// </param>
         public Rope(
             string libPath    = null,
             string exePath    = null,
             string cachePath  = null,
-            string configPath = null)
+            string configPath = null,
+            bool?  extrapolateAltitude = null,
+            int?   nEtpPts    = null)
         {
             string asmDir = Path.GetDirectoryName(typeof(Rope).Assembly.Location) ?? ".";
             string root   = Path.GetFullPath(Path.Combine(asmDir, ".."));
@@ -167,12 +186,15 @@ namespace RopeFramework
             _ropeOpen       = Load<RopeOpenFn>("rope_open");
             _ropeQuery      = Load<RopeQueryFn>("rope_query");
             _ropeQueryBatch = Load<RopeQueryBatchFn>("rope_query_batch");
+            _ropeSetExtrapolation = Load<RopeSetExtrapolationFn>("rope_set_extrapolation");
             _ropeClose      = Load<RopeCloseFn>("rope_close");
             _ropeGetManifestInfo = Load<RopeGetManifestInfoFn>("rope_get_manifest_info");
 
             _cachePath  = cachePath;
             _exePath    = exePath;
             _configPath = configPath;
+            _extrapolateAltitude = extrapolateAltitude;
+            _nEtpPts    = nEtpPts;
         }
 
         private T Load<T>(string symbol) where T : class =>
@@ -215,6 +237,9 @@ namespace RopeFramework
             if (handle == IntPtr.Zero)
                 throw new RopeException(2, ReadErr(err));
             _handle = handle;
+
+            if (_extrapolateAltitude.HasValue || _nEtpPts.HasValue)
+                SetExtrapolation(_extrapolateAltitude ?? true, _nEtpPts);
         }
 
         /// <summary>Release the interpolation handle (unmaps the cache file).</summary>
@@ -237,6 +262,15 @@ namespace RopeFramework
         public void Shutdown()
         {
             Close();
+        }
+
+        /// <summary>Reconfigures altitude extrapolation on the open handle; nEtpPts=null keeps its current value.</summary>
+        public void SetExtrapolation(bool extrapolateAltitude = true, int? nEtpPts = null)
+        {
+            EnsureOpen();
+            byte* err = stackalloc byte[ErrBufLen];
+            int rc = _ropeSetExtrapolation(_handle, extrapolateAltitude ? 1 : 0, nEtpPts ?? 0, err, ErrBufLen);
+            if (rc != 0) throw new RopeException(rc, ReadErr(err));
         }
 
         // -------------------------------------------------------------------------
@@ -385,8 +419,9 @@ namespace RopeFramework
         /// <summary>Query density and uncertainty at a single point.</summary>
         /// <param name="timeUnix">Query time as Unix timestamp (seconds since 1970-01-01T00:00:00 UTC).</param>
         /// <param name="lst">Local Solar Time, hours [0, 24).</param>
-        /// <param name="lat">Geodetic latitude, degrees [-87.5, 87.5].</param>
-        /// <param name="altKm">Geometric altitude, km [100, 980].</param>
+        /// <param name="lat">Geodetic latitude, degrees [-90, 90] (polar-cap blend beyond the grid's own range).</param>
+        /// <param name="altKm">Geometric altitude, km. Below alt_min_km always throws; above alt_max_km
+        /// log-linearly extrapolates up to 2000 km by default (see SetExtrapolation()).</param>
         /// <param name="mode">Rope.Hold or Rope.Interp (default).</param>
         public QueryResult Get(double timeUnix, double lst, double lat, double altKm, int mode = Interp)
         {
@@ -404,8 +439,9 @@ namespace RopeFramework
         /// <summary>Query density and uncertainty at a single point.</summary>
         /// <param name="time">Query time (UTC).</param>
         /// <param name="lst">Local Solar Time, hours [0, 24).</param>
-        /// <param name="lat">Geodetic latitude, degrees [-87.5, 87.5].</param>
-        /// <param name="altKm">Geometric altitude, km [100, 980].</param>
+        /// <param name="lat">Geodetic latitude, degrees [-90, 90] (polar-cap blend beyond the grid's own range).</param>
+        /// <param name="altKm">Geometric altitude, km. Below alt_min_km always throws; above alt_max_km
+        /// log-linearly extrapolates up to 2000 km by default (see SetExtrapolation()).</param>
         /// <param name="mode">Rope.Hold or Rope.Interp (default).</param>
         public QueryResult Get(DateTime time, double lst, double lat, double altKm, int mode = Interp) =>
             Get(ToUnix(time), lst, lat, altKm, mode);

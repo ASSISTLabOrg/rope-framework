@@ -66,6 +66,11 @@ class Rope:
     device      : Decoder device string (e.g. "cpu", "cuda", "cuda:1").
                   Defaults to the value in rope.conf. Only affects LibTorch builds;
                   ignored by ONNX Runtime builds.
+    extrapolate_altitude : Enable/disable log-linear extrapolation past alt_max_km.
+                  None (default) leaves the library default (on) in place.
+                  Applied automatically on open(); see set_extrapolation().
+    n_etp_pts   : Altitude bins used to fit the extrapolation slope. None (default)
+                  leaves the library default (8) in place.
     """
 
     def __init__(
@@ -75,6 +80,8 @@ class Rope:
         cache_path: "str | None" = None,
         config_path: "str | Path | None" = None,
         device: "str | None" = None,
+        extrapolate_altitude: "bool | None" = None,
+        n_etp_pts: "int | None" = None,
     ):
         # rope.py lives in python/ inside the archive; bin/ and lib/ are one level up.
         root = Path(__file__).parent.parent
@@ -115,6 +122,8 @@ class Rope:
         self._lib_path   = Path(lib_path)
         self._exe_path   = Path(exe_path) if exe_path else None
         self._cache_path = cache_path
+        self._extrapolate_altitude = extrapolate_altitude
+        self._n_etp_pts  = n_etp_pts
         self._handle: "int | None" = None
         self._lib        = self._load_lib()
 
@@ -163,6 +172,13 @@ class Rope:
             raise RopeError(2, err.value.decode())
         self._handle = handle
 
+        if self._extrapolate_altitude is not None or self._n_etp_pts is not None:
+            self.set_extrapolation(
+                extrapolate_altitude=self._extrapolate_altitude
+                if self._extrapolate_altitude is not None else True,
+                n_etp_pts=self._n_etp_pts,
+            )
+
     def close(self):
         """Release the interpolation handle (unmaps the cache file)."""
         if self._handle is not None:
@@ -173,6 +189,20 @@ class Rope:
         """Re-map the current cache file (picks up a forecast written since open())."""
         self.close()
         self.open()
+
+    def set_extrapolation(self, extrapolate_altitude: bool = True, n_etp_pts: "int | None" = None):
+        """Reconfigures altitude extrapolation on the open handle; n_etp_pts=None keeps its current value."""
+        if self._handle is None:
+            self.open()
+        err = ctypes.create_string_buffer(256)
+        rc = self._lib.rope_set_extrapolation(
+            self._handle,
+            1 if extrapolate_altitude else 0,
+            n_etp_pts if n_etp_pts is not None else 0,
+            err, len(err),
+        )
+        if rc != 0:
+            raise RopeError(rc, err.value.decode())
 
     def shutdown(self):
         """Alias for close(). There is no background process to stop --
@@ -269,8 +299,9 @@ class Rope:
         ----------
         time   : Query time — Unix timestamp, ISO 8601 string, or datetime (UTC).
         lst    : Local Solar Time, hours [0, 24).
-        lat    : Geodetic latitude, degrees [-87.5, 87.5].
-        alt_km : Geometric altitude, km [100, 980].
+        lat    : Geodetic latitude, degrees [-90, 90] (polar-cap blend beyond the grid's own range).
+        alt_km : Geometric altitude, km. Below the grid's alt_min_km always throws; above alt_max_km
+                 log-linearly extrapolates up to 2000 km by default (see set_extrapolation()).
         mode   : ROPE_INTERP (default) or ROPE_HOLD.
 
         Returns {"density": float, "uncertainty": float} in kg/m³.
@@ -438,6 +469,12 @@ class Rope:
             ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+            ctypes.c_char_p, ctypes.c_int,
+        ]
+
+        lib.rope_set_extrapolation.restype  = ctypes.c_int
+        lib.rope_set_extrapolation.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
             ctypes.c_char_p, ctypes.c_int,
         ]
 
