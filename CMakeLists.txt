@@ -193,12 +193,7 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# rope_net — HTTPS client for DriverCacheManager (rope::net::IHttpClient impl)
-#
-# Deliberately its own target, not folded into rope_io: rope_io is linked into
-# the capi shared library (`rope`), which must stay free of the TLS/OpenSSL
-# dependency (capi-boundary.md) — only rope_forecast actually constructs a
-# DriverCacheManager without an injected fake, so only rope_forecast links this.
+# rope_net — HTTPS client (rope::net::IHttpClient); kept out of rope_io so capi stays free of TLS/OpenSSL.
 # ---------------------------------------------------------------------------
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cacert.pem" ROPE_CACERT_PEM_CONTENT)
 configure_file(cmake/cacert_pem.cpp.in
@@ -393,8 +388,7 @@ if(ROPE_MODELS_DIR AND EXISTS "${ROPE_MODELS_DIR}")
     install(DIRECTORY "${ROPE_MODELS_DIR}/" DESTINATION data/models/tiegcm-aurora-v1)
 endif()
 
-# Driver (space-weather) data is intentionally NOT bundled — downloaded separately (README.md)
-# or fetched automatically at forecast time by DriverCacheManager.
+# Driver (space-weather) data is not bundled — downloaded separately (README.md) or fetched by DriverCacheManager.
 
 # Python binding
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/python/" DESTINATION python)

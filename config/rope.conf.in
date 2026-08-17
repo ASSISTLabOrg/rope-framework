@@ -18,6 +18,9 @@ decode_chunk_hours = 72
 # <= 0 = use the model's own value
 decode_batch_size = 0
 
+# Hours run before start_time for the model to settle; 0 disables warm-up (not recommended)
+warmup_time_hours = 48
+
 # ---------------------------------------------------------------------------
 [paths]
 # ---------------------------------------------------------------------------
@@ -25,9 +28,7 @@ decode_batch_size = 0
 # Model directory
 exported_dir = ../data/models/wam-borealis-v1
 
-# Explicit driver data file (.swbin or .csv). Comment out to use automated driver caching.
-# Manual CSV files must be in ROPE's own format (same as ../data/drivers/sw_drivers.csv), not a raw
-# CelesTrak download — convert one of those first: rope convert-sw --input <raw.csv> --output <out.swbin>
+# Explicit driver file, ROPE format not raw CelesTrak (convert via rope convert-sw). Comment out for automated caching.
 # driver_path = ../data/drivers/sw_celestrak_example.swbin
 
 # ---------------------------------------------------------------------------

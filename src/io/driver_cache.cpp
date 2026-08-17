@@ -96,9 +96,7 @@ std::string DriverCacheManager::download(const std::string& url) {
     return http_->get(url);
 }
 
-// ─── PCHIP interpolation helpers (Fritsch-Carlson algorithm) ─────────────────
-// Matches scipy.interpolate.PchipInterpolator behaviour: extrapolate=False
-// returns NaN for query points outside [x.front(), x.back()].
+// ─── PCHIP interpolation (Fritsch-Carlson), matching scipy's extrapolate=False: NaN outside [x.front(), x.back()] ─────────────────
 
 namespace {
 
@@ -275,8 +273,7 @@ static std::vector<CelRow> parse_celestrak(const std::string& raw) {
     return rows;
 }
 
-// PCHIP-interpolates an 8-values-per-day 3-hourly series (Kp or Ap) to hourly, per day, using the
-// next day's first value as the 24h continuity endpoint. get_v(row, k) extracts the k'th 3-hourly value.
+// PCHIP-interpolates an 8-values-per-day 3-hourly series to hourly, per day; get_v(row,k) extracts the k'th value, next day's [0] is the 24h endpoint.
 template <typename GetV>
 static std::unordered_map<TimePoint, std::array<double, 24>>
 build_hourly_daily(const std::vector<CelRow>& rows, GetV get_v) {
@@ -327,8 +324,7 @@ void convert_celestrak_csv_to_swbin(const std::string& raw_csv, const fs::path& 
         throw std::runtime_error(
             "convert_celestrak_csv_to_swbin: no data rows parsed");
 
-    // 2. Build daily F10.7 series (hours-since-epoch as x).
-    //    Reference epoch: midnight of first day with valid F10.7.
+    // 2. Build daily F10.7 series (hours-since-epoch as x); reference epoch is midnight of the first day with valid F10.7.
     std::vector<double> xf, yf;
     xf.reserve(rows.size());
     yf.reserve(rows.size());
@@ -349,15 +345,11 @@ void convert_celestrak_csv_to_swbin(const std::string& raw_csv, const fs::path& 
     // PCHIP slopes for F10.7.
     auto df107 = pchip_slopes(xf, yf);
 
-    // 3. PCHIP Kp and Ap per day: 3-hourly → hourly. Kp stays in raw tenths (divided later);
-    //    Ap needs no rescaling — CelesTrak already reports it on its native linear scale.
-    //    Both models bundled with this framework use celestrak_sw but read different raw
-    //    columns (tiegcm-aurora-v1 wants kp, wam-borealis-v1 wants ap), so both are always produced.
+    // 3. PCHIP Kp and Ap per day: 3-hourly → hourly; Kp stays in raw tenths (divided later), Ap needs no rescaling.
     auto kp_daily = build_hourly_daily(rows, [](const CelRow& r, int k) { return r.kp[k]; });
     auto ap_daily = build_hourly_daily(rows, [](const CelRow& r, int k) { return r.ap[k]; });
 
-    // 4. Generate hourly output: inner join of F10.7, Kp, and Ap.
-    //    Walk hour-by-hour over the F10.7 range; look up Kp/Ap from their daily maps.
+    // 4. Generate hourly output: inner join of F10.7, Kp, and Ap; walk hour-by-hour, looking up Kp/Ap from their daily maps.
     const double x_min = xf.front();
     const double x_max = xf.back();
 
@@ -390,11 +382,7 @@ void convert_celestrak_csv_to_swbin(const std::string& raw_csv, const fs::path& 
         throw std::runtime_error(
             "convert_celestrak_csv_to_swbin: no output rows after merging F10.7, Kp, and Ap");
 
-    // 5. Write .swbin directly (magic RPSW, matches driver_bin.h v2 format).
-    //    Header (16 bytes): magic uint32, version uint32, nrows uint32, ncols uint32
-    //    Name table (3 entries): "f10", "kp", "ap" (doy/hour_int are derived from tp
-    //    on read and never need to be stored — see DriverRow::get()).
-    //    Records: tp int64, then ncols float32 values in name-table order.
+    // 5. Write .swbin directly, matching driver_bin.h's v2 format (3 columns: f10, kp, ap).
     std::error_code ec;
     fs::create_directories(dest.parent_path(), ec);
 

@@ -14,8 +14,7 @@ using Catch::Matchers::WithinAbs;
 
 namespace {
 
-// Test double for rope::net::IHttpClient — either returns a canned body or always throws,
-// so refresh()'s success and failure paths are both exercisable offline.
+// Test double for rope::net::IHttpClient — returns a canned body, or always throws.
 class FakeHttpClient final : public rope::net::IHttpClient {
 public:
     struct AlwaysFails {};
@@ -43,8 +42,7 @@ std::unique_ptr<rope::net::IHttpClient> fake_failing(std::string message = "simu
     return std::make_unique<FakeHttpClient>(FakeHttpClient::AlwaysFails{}, std::move(message));
 }
 
-// Minimal 3-day CelesTrak-shaped CSV: only the columns convert_celestrak_csv_to_swbin() actually reads.
-// KP values are raw tenths (CelesTrak convention); AP values are already linear (no rescaling); F10.7 is SFU.
+// Minimal 3-day CelesTrak-shaped CSV: KP is raw tenths, AP is already linear, F10.7 is SFU.
 const std::string kValidCelestrakCsv =
     "DATE,KP1,KP2,KP3,KP4,KP5,KP6,KP7,KP8,AP1,AP2,AP3,AP4,AP5,AP6,AP7,AP8,F10.7_OBS\n"
     "2024-01-01,10,13,17,20,23,27,30,33,4,5,6,7,9,12,15,18,150.0\n"
@@ -81,8 +79,7 @@ TEST_CASE("DriverCacheManager: unknown source throws") {
 TEST_CASE("DriverCacheManager: no cached file and a failed refresh throws") {
     auto dir = make_cache_dir("rope_test_cache_missing");
     rope::io::DriverCacheManager mgr(dir, /*max_age_hours=*/24, fake_failing());
-    // Nothing cached, and the injected client always fails — nothing to fall back
-    // to, so this must fail loudly rather than return a bad path.
+    // Nothing cached and the client always fails — no fallback, must throw.
     REQUIRE_THROWS_AS(mgr.get_path("celestrak_sw"), std::runtime_error);
 }
 
@@ -140,8 +137,7 @@ TEST_CASE("DriverCacheManager: successful refresh downloads, converts, and write
 }
 
 TEST_CASE("convert_celestrak_csv_to_swbin: converts a local raw CelesTrak CSV with no network involved") {
-    // Exercises the exact seam `rope convert-sw` uses for a raw (unconverted) CelesTrak file —
-    // no DriverCacheManager, no IHttpClient, just the free converter on bytes already in hand.
+    // Exercises the seam `rope convert-sw` uses: no DriverCacheManager, no IHttpClient, just the free converter.
     auto dir  = make_cache_dir("rope_test_celestrak_convert_direct");
     auto dest = dir / "local.swbin";
 
@@ -149,8 +145,7 @@ TEST_CASE("convert_celestrak_csv_to_swbin: converts a local raw CelesTrak CSV wi
     REQUIRE(fs::exists(dest));
 
     auto db = rope::io::SpaceWeatherDB::from_file(dest);
-    // Day 3 (the last row) never gets an hourly entry — build_hourly_daily() needs a *following*
-    // row to supply the 24h continuity endpoint, so only day 1 and day 2 are ever emitted.
+    // Day 3 (the last row) never gets an hourly entry — build_hourly_daily() needs a following row for the 24h endpoint.
     auto row = db.lookup(rope::parse_datetime("2024-01-02 00:00:00"));
     CHECK_THAT(row.get("f10"), WithinAbs(152.5, 1e-3));
     CHECK_THAT(row.get("kp"),  WithinAbs(1.3, 1e-3));   // KP1 = 13 (tenths) -> 1.3
@@ -160,9 +155,7 @@ TEST_CASE("convert_celestrak_csv_to_swbin: converts a local raw CelesTrak CSV wi
 TEST_CASE("DriverCacheManager: non-2xx / malformed response fails loudly and reaches get_path()") {
     auto dir = make_cache_dir("rope_test_cache_malformed");
 
-    // Simulates the client surfacing an HTTP-level failure (e.g. non-2xx) as a thrown error —
-    // exercised through get_path() so the get_path -> refresh -> download chain is proven, not
-    // just convert_celestrak_csv_to_swbin() in isolation.
+    // Simulates an HTTP-level failure (e.g. non-2xx), exercised through get_path()'s full refresh->download chain.
     rope::io::DriverCacheManager http_fail(dir, /*max_age_hours=*/24,
         fake_failing("http_client: GET ... returned HTTP 503"));
     REQUIRE_THROWS_AS(http_fail.get_path("celestrak_sw"), std::runtime_error);

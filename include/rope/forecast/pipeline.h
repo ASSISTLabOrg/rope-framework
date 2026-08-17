@@ -56,6 +56,9 @@ struct Config {
     // Caps decoder batch size (<= 0: manifest value, only ever lowered); trades decoder calls for memory; ULP-level float drift vs. other values.
     int decode_batch_size = 0;
 
+    // Hours run before start_time to let the model settle; spin-up only, never decoded/cached. Default 0 here; rope.conf.in ships 48.
+    int warmup_time_hours = 0;
+
     // Load-progress callback. Default (nullptr): silent.
     std::function<void(std::string_view)> log;
 };

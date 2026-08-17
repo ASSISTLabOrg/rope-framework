@@ -4,7 +4,7 @@
 
 namespace rope::net {
 
-// Minimal HTTPS GET boundary; virtual so callers (DriverCacheManager) can inject a fake in tests. No transitive TLS/HTTP dependency here — see http_client.cpp for the production implementation.
+// HTTPS GET boundary; virtual for test injection. Production implementation: http_client.cpp.
 class IHttpClient {
 public:
     virtual ~IHttpClient() = default;
@@ -13,7 +13,7 @@ public:
     virtual std::string get(const std::string& url) = 0;
 };
 
-// Production client (cpp-httplib + OpenSSL, bundled CA store). Only linked where actually called — see rope_net's CMake scoping.
+// Production client: cpp-httplib + OpenSSL, bundled CA store.
 std::unique_ptr<IHttpClient> make_http_client();
 
 } // namespace rope::net

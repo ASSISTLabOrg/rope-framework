@@ -24,6 +24,8 @@ Config config_from_reader(const io::ConfigReader& config,
     fcfg.compute_uncertainty   = config.get("forecast.compute_uncertainty", "true") == "true";
     fcfg.decode_chunk_hours    = config.get_int("forecast.decode_chunk_hours", 72);
     fcfg.decode_batch_size     = config.get_int("forecast.decode_batch_size", 0);
+    // Fallback is 0, not rope.conf.in's shipped 48; a config that omits this key keeps unchanged behavior.
+    fcfg.warmup_time_hours     = config.get_int("forecast.warmup_time_hours", 0);
 
     return fcfg;
 }

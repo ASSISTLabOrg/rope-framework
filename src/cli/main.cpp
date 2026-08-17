@@ -155,8 +155,8 @@ int main(int argc, char** argv) {
     fc->add_option("--zarr",    fc_zarr,
                    "Also export as a Zarr store (container directory)");
     fc->add_option("--driver",  fc_driver,
-                   "Explicit driver .swbin/CSV path, in ROPE's own format (overrides paths.driver_path; "
-                   "no cache, no network). A raw CelesTrak CSV needs 'rope convert-sw' first.");
+                   "Explicit driver .swbin/CSV path in ROPE's own format (overrides paths.driver_path; "
+                   "raw CelesTrak CSVs need 'rope convert-sw' first)");
 
     // ---- manifest subcommand ----
     auto* mc = app.add_subcommand("manifest",
@@ -192,9 +192,7 @@ int main(int argc, char** argv) {
                                    "Convert a space-weather CSV to .swbin binary format");
     std::string sw_input, sw_output;
     sw->add_option("--input",  sw_input,
-                   "Input CSV file — either ROPE canonical (datetime,f10,kp,...) or a raw "
-                   "CelesTrak SW-*.csv (DATE,...,KP1..KP8,...,AP1..AP8,...,F10.7_OBS,...); "
-                   "format is auto-detected from the header")
+                   "Input CSV file (ROPE canonical or raw CelesTrak; format auto-detected)")
       ->required();
     sw->add_option("--output", sw_output, "Output .swbin file")
       ->required();
@@ -242,14 +240,28 @@ int main(int argc, char** argv) {
             // Output spans hour 0 (fc_start) through hour fc_horizon, inclusive.
             const int total_steps = fc_horizon + 1;
 
+            // Warm-up (rope.conf's [forecast] warmup_time_hours): runs from fc_start-warmup, but only writes [fc_start, fc_start+horizon].
+            if (fcfg.warmup_time_hours < 0)
+                throw std::runtime_error(
+                    "forecast.warmup_time_hours must be >= 0 (got " +
+                    std::to_string(fcfg.warmup_time_hours) + ")");
+            const int warmup_hours    = fcfg.warmup_time_hours;
+            const int run_horizon     = fc_horizon + warmup_hours;
+            const int run_total_steps = run_horizon + 1;
+            const std::string run_start_iso = warmup_hours > 0
+                ? rope::format_iso(rope::parse_datetime(fc_start) -
+                                   static_cast<rope::TimePoint>(warmup_hours) * 3600)
+                : fc_start;
+
+            const long long voxels = pipeline->grid_shape().voxels();
+
             {
                 // Grid-stitch buffers only; excludes decoder forward-pass memory (dominant, architecture-dependent, not derivable here).
                 const int n_sig = fcfg.compute_uncertainty
                     ? 2 * pipeline->latent_dim() + 1 : 1;
-                const long long voxels = pipeline->grid_shape().voxels();
                 const int effective_chunk_hours = std::min(
-                    fcfg.decode_chunk_hours > 0 ? fcfg.decode_chunk_hours : total_steps,
-                    total_steps);
+                    fcfg.decode_chunk_hours > 0 ? fcfg.decode_chunk_hours : run_total_steps,
+                    run_total_steps);
                 const long long floats_per_chunk = fcfg.compute_uncertainty
                     ? static_cast<long long>(effective_chunk_hours) * voxels * (n_sig + 2)
                     : static_cast<long long>(effective_chunk_hours) * voxels * 2;
@@ -258,7 +270,10 @@ int main(int argc, char** argv) {
                 std::cerr << "rope forecast: decode_chunk_hours=" << fcfg.decode_chunk_hours
                           << " (effective=" << effective_chunk_hours << ")"
                           << "  estimated grid-buffer memory ~" << est_mb << " MB"
-                          << " (excludes decoder network working memory)\n";
+                          << " (excludes decoder network working memory)";
+                if (warmup_hours > 0)
+                    std::cerr << "  [+" << warmup_hours << "h warm-up, not cached]";
+                std::cerr << "\n";
             }
 
             auto writer = rope::io::ForecastGridBinWriter::open(
@@ -273,21 +288,33 @@ int main(int argc, char** argv) {
                         pipeline->grid_shape(), total_steps, pipeline->latent_dim(),
                         pipeline->model_kind(),
                         fc_start, fs::path{fc_zarr});
-                    zarr->write_latent(latent_mean);
+                    // Drops the leading warmup_hours*latent_dim floats from the (run_horizon+1)*latent_dim delivery.
+                    const std::size_t skip = static_cast<std::size_t>(warmup_hours) *
+                                             static_cast<std::size_t>(pipeline->latent_dim());
+                    zarr->write_latent(latent_mean.subspan(skip));
                 };
             }
 #endif
 
             std::string window_start, window_end;
-            pipeline->run_streaming(fc_start, fc_horizon, fcfg.decode_chunk_hours,
+            pipeline->run_streaming(run_start_iso, run_horizon, fcfg.decode_chunk_hours,
                 [&](int t_offset, std::span<const std::int64_t> times,
                     std::span<const float> density, std::span<const float> uncertainty) {
-                    writer.write_chunk(t_offset, times, density, uncertainty);
+                    // Slices rather than skips whole chunks, since a chunk may straddle the warm-up boundary.
+                    if (t_offset + static_cast<int>(times.size()) <= warmup_hours) return;
+                    const int skip = std::max(0, warmup_hours - t_offset);
+                    const int out_t_offset = std::max(0, t_offset - warmup_hours);
+                    const auto voxels_sz = static_cast<std::size_t>(voxels);
+                    auto times_trim       = times.subspan(static_cast<std::size_t>(skip));
+                    auto density_trim     = density.subspan(static_cast<std::size_t>(skip) * voxels_sz);
+                    auto uncertainty_trim = uncertainty.subspan(static_cast<std::size_t>(skip) * voxels_sz);
+
+                    writer.write_chunk(out_t_offset, times_trim, density_trim, uncertainty_trim);
 #ifdef ROPE_HAS_ZARR
-                    if (zarr) zarr->write_chunk(t_offset, times, density, uncertainty);
+                    if (zarr) zarr->write_chunk(out_t_offset, times_trim, density_trim, uncertainty_trim);
 #endif
-                    if (t_offset == 0) window_start = rope::format_iso(times.front());
-                    window_end = rope::format_iso(times.back());
+                    if (out_t_offset == 0) window_start = rope::format_iso(times_trim.front());
+                    window_end = rope::format_iso(times_trim.back());
                 }
 #ifdef ROPE_HAS_ZARR
                 , latent_sink

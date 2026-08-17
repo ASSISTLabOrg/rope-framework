@@ -20,7 +20,7 @@ struct ParsedUrl {
     std::string path;        // everything from the first '/' after the host onward; "/" if none
 };
 
-// Splits scheme+host (for the Client constructor) from path+query (for Get()) — httplib::Client takes only the former.
+// Splits scheme+host (httplib::Client's constructor) from path+query (Get()).
 ParsedUrl parse_url(const std::string& url) {
     std::string_view sv{url};
     std::string_view scheme;
@@ -41,6 +41,7 @@ ParsedUrl parse_url(const std::string& url) {
 // cpp-httplib client backed by the bundled CA store — never touches the host's own trust store.
 class CppHttplibClient final : public IHttpClient {
 public:
+    // GET url; throws on any transport or HTTP-level failure.
     std::string get(const std::string& url) override {
         ParsedUrl u = parse_url(url);
 
@@ -51,7 +52,7 @@ public:
         cli.set_default_headers({{"User-Agent", "rope-framework driver-cache"}});
         cli.enable_server_certificate_verification(true);
         cli.load_ca_cert_store(detail::cacert_pem, std::strlen(detail::cacert_pem));
-        cli.enable_system_ca(false); // bundled store is authoritative regardless of host trust-store state
+        cli.enable_system_ca(false); // bundled store only, never the host's
 
         auto res = cli.Get(u.path);
         if (!res)

@@ -140,6 +140,44 @@ def test_forecast_driver_override_accepts_shuffled_columns(tmp_path):
     assert data["status"] == "ok"
 
 
+def test_forecast_warmup_runs_wider_but_writes_and_queries_only_the_requested_window(tmp_path):
+    """warmup_time_hours widens the run window, but only [start, start+horizon] is ever written or queryable."""
+    conf = tmp_path / "rope.conf"
+    conf.write_text(
+        f"[forecast]\n"
+        f"warmup_time_hours = 24\n"
+        f"[paths]\n"
+        f"exported_dir = {FIXTURE_DIR / 'test_models'}\n"
+        f"driver_path  = {FIXTURE_DIR / 'sw_test_long.csv'}\n"
+    )
+    cache = str(tmp_path / "forecast_grid.bin")
+
+    result = _rope(
+        "--cache-path", cache, "forecast",
+        "--start", FORECAST_START, "--horizon", str(FORECAST_HORIZON),
+        "--config", str(conf),
+    )
+    assert result.returncode == 0, f"forecast with warmup failed:\n{result.stderr}"
+    data = json.loads(result.stdout.strip().splitlines()[-1])
+    assert data["status"] == "ok"
+    assert data["window_start"] == "2024-01-01T00:00:00"
+    assert data["window_end"]   == "2024-01-01T03:00:00"
+
+    in_range = _rope(
+        "--cache-path", cache, "get", "--mode", "hold",
+        "--time", FORECAST_START.replace(" ", "T"),
+        "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
+    )
+    assert in_range.returncode == 0, f"query at start_time should succeed:\n{in_range.stderr}"
+
+    before_start = _rope(
+        "--cache-path", cache, "get", "--mode", "hold",
+        "--time", "2023-12-31T23:00:00",
+        "--lst", "12.0", "--lat", "45.0", "--alt", "400.0",
+    )
+    assert before_start.returncode != 0, "warmup hours must not be queryable"
+
+
 def test_rope_binding_forecast_uses_custom_cache_path(tmp_path):
     """Regression test: Rope.forecast() must pass --cache-path when a custom
     cache_path is configured -- otherwise it silently falls back to the

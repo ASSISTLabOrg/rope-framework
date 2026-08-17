@@ -18,14 +18,12 @@ struct DriverSource {
 const std::unordered_map<std::string, DriverSource>& known_sources();
 
 // CelesTrak CSV (DATE, F10.7_OBS, KP1..KP8, AP1..AP8) -> hourly .swbin (f10, kp, ap) via PCHIP interpolation.
-// Free function (no DriverCacheManager instance needed) so both the live download path and `rope convert-sw`
-// can convert a raw CelesTrak CSV — the latter from a local file, without ever touching the network.
 void convert_celestrak_csv_to_swbin(const std::string& raw_csv, const std::filesystem::path& dest);
 
 // Local cache of driver .swbin files refreshed from online sources; wired into Pipeline::load() for auto-refresh.
 class DriverCacheManager {
 public:
-    // `http` defaults to the production HTTPS client; tests inject a fake to exercise refresh() without the network.
+    // `http` defaults to the production HTTPS client.
     explicit DriverCacheManager(std::filesystem::path cache_dir,
                                 int max_age_hours = 24,
                                 std::unique_ptr<net::IHttpClient> http = net::make_http_client());
