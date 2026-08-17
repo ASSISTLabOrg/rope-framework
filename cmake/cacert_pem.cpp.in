@@ -2,5 +2,6 @@
 #include "cacert_pem.h"
 
 namespace rope::net::detail {
-const char* const cacert_pem = R"ROPE_CACERT(@ROPE_CACERT_PEM_CONTENT@)ROPE_CACERT";
+const char* const cacert_pem =
+@ROPE_CACERT_PEM_CHUNKS@;
 } // namespace rope::net::detail

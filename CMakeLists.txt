@@ -195,9 +195,7 @@ endif()
 # ---------------------------------------------------------------------------
 # rope_net — HTTPS client (rope::net::IHttpClient); kept out of rope_io so capi stays free of TLS/OpenSSL.
 # ---------------------------------------------------------------------------
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cacert.pem" ROPE_CACERT_PEM_CONTENT)
-configure_file(cmake/cacert_pem.cpp.in
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/cacert_pem.cpp" @ONLY)
+include(cmake/EmbedCacert.cmake)
 
 add_library(rope_net STATIC
     src/net/http_client.cpp
