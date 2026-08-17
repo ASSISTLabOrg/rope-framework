@@ -59,6 +59,18 @@ target_compile_definitions(rope_tests PRIVATE
 )
 catch_discover_tests(rope_tests)
 
+# CLI-level check: `rope convert-sw` on a raw (unconverted) CelesTrak CSV — doesn't need ORT/rope_forecast,
+# so this runs unconditionally, unlike the pipeline tests below.
+add_test(
+    NAME    rope_convert_sw_detects_raw_celestrak_format
+    COMMAND rope_exe convert-sw
+            --input  "${ROPE_FIXTURE_DIR}/sw_celestrak_test.csv"
+            --output "${CMAKE_CURRENT_BINARY_DIR}/convert_sw_celestrak_test.swbin"
+)
+set_tests_properties(rope_convert_sw_detects_raw_celestrak_format PROPERTIES
+    PASS_REGULAR_EXPRESSION "Detected raw CelesTrak format"
+)
+
 if(TARGET rope_forecast)
     add_executable(rope_pipeline_tests
         test_pipeline.cpp

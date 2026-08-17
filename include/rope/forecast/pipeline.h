@@ -26,7 +26,7 @@ struct Config {
     // Directory produced by export_models.py.
     std::filesystem::path exported_dir;
 
-    // Explicit driver file (.swbin/.csv). Empty: use driver_config.json + DriverCacheManager.
+    // Explicit driver file (.swbin/.csv). Empty: use the manifest's drivers.source + DriverCacheManager.
     std::filesystem::path driver_path;
 
     // Cached .swbin directory. Empty: platform cache root.

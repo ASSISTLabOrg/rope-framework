@@ -119,6 +119,21 @@ rope manifest
 
 Prints the model's driver columns, grid shape, and validation status. Add `--json` for machine-readable output.
 
+### Space-weather driver data
+
+By default `rope forecast` downloads and caches the space-weather data (F10.7, Kp, Ap) it needs directly from [CelesTrak](https://celestrak.org/SpaceData/) — nothing to configure. The cache refreshes automatically once a day; see `[driver_cache]` in `rope.conf` to change the interval or cache location.
+
+To supply your own driver data instead (offline use, a trimmed/custom dataset, testing), point `--driver <path>` (or `paths.driver_path` in `rope.conf`) at a `.swbin` or CSV file. **The file must already be in ROPE's own format** (`datetime,f10,kp,...` columns) — a CSV downloaded straight from CelesTrak (`DATE,...,KP1..KP8,...,AP1..AP8,...` columns) is a different shape and fails with `unknown column 'datetime'` if used as-is.
+
+Convert a raw CelesTrak CSV first, then point `--driver` at the result:
+
+```
+rope convert-sw --input SW-Last5Years.csv --output sw.swbin
+rope forecast --driver sw.swbin --start "2024-06-01 00:00:00" --horizon 24
+```
+
+`convert-sw` auto-detects raw CelesTrak vs. ROPE's own CSV format from the header — no flag needed either way.
+
 ### Use a non-default config
 
 ```

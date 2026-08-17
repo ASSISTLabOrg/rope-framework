@@ -25,6 +25,7 @@
 #include "rope/interpolate/grid_interpolator.h"
 #include "rope/io/config_reader.h"
 #include "rope/io/csv_reader.h"
+#include "rope/io/driver_cache.h"
 #include "rope/io/driver_db.h"
 #include "rope/io/driver_bin.h"
 #include "rope/io/forecast_grid_bin.h"
@@ -49,6 +50,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -153,7 +155,8 @@ int main(int argc, char** argv) {
     fc->add_option("--zarr",    fc_zarr,
                    "Also export as a Zarr store (container directory)");
     fc->add_option("--driver",  fc_driver,
-                   "Explicit driver CSV/.swbin path (overrides paths.driver_path; no cache, no network)");
+                   "Explicit driver .swbin/CSV path, in ROPE's own format (overrides paths.driver_path; "
+                   "no cache, no network). A raw CelesTrak CSV needs 'rope convert-sw' first.");
 
     // ---- manifest subcommand ----
     auto* mc = app.add_subcommand("manifest",
@@ -188,7 +191,10 @@ int main(int argc, char** argv) {
     auto* sw = app.add_subcommand("convert-sw",
                                    "Convert a space-weather CSV to .swbin binary format");
     std::string sw_input, sw_output;
-    sw->add_option("--input",  sw_input,  "Input CSV file (datetime,f10,kp,...)")
+    sw->add_option("--input",  sw_input,
+                   "Input CSV file — either ROPE canonical (datetime,f10,kp,...) or a raw "
+                   "CelesTrak SW-*.csv (DATE,...,KP1..KP8,...,AP1..AP8,...,F10.7_OBS,...); "
+                   "format is auto-detected from the header")
       ->required();
     sw->add_option("--output", sw_output, "Output .swbin file")
       ->required();
@@ -403,14 +409,32 @@ int main(int argc, char** argv) {
     // ---- convert-sw ----
     if (sw->parsed()) {
         try {
-            std::cout << "Loading " << sw_input << "…\n";
-            auto db = rope::io::SpaceWeatherDB::from_file(fs::path{sw_input});
-            std::cout << "  " << db.size() << " rows  ["
-                      << rope::format_iso(db.time_min()) << " → "
-                      << rope::format_iso(db.time_max()) << "]\n";
-            std::cout << "Writing " << sw_output << "…\n";
-            rope::io::SpaceWeatherBin::save(db, fs::path{sw_output});
-            std::cout << "Done.\n";
+            // Detect raw CelesTrak (header line starts "DATE") vs. ROPE canonical ("datetime") format.
+            std::ifstream probe(sw_input);
+            if (!probe) throw std::runtime_error("cannot open " + sw_input);
+            std::string first_line;
+            while (std::getline(probe, first_line) && first_line.empty()) {}
+            probe.close();
+
+            if (first_line.starts_with("DATE")) {
+                std::cout << "Detected raw CelesTrak format\n";
+                std::ifstream in(sw_input, std::ios::binary);
+                if (!in) throw std::runtime_error("cannot open " + sw_input);
+                std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                std::cout << "Writing " << sw_output << "…\n";
+                rope::io::convert_celestrak_csv_to_swbin(raw, fs::path{sw_output});
+                std::cout << "Done.\n";
+            } else {
+                std::cout << "Detected ROPE canonical format\n";
+                std::cout << "Loading " << sw_input << "…\n";
+                auto db = rope::io::SpaceWeatherDB::from_file(fs::path{sw_input});
+                std::cout << "  " << db.size() << " rows  ["
+                          << rope::format_iso(db.time_min()) << " → "
+                          << rope::format_iso(db.time_max()) << "]\n";
+                std::cout << "Writing " << sw_output << "…\n";
+                rope::io::SpaceWeatherBin::save(db, fs::path{sw_output});
+                std::cout << "Done.\n";
+            }
         } catch (const std::exception& e) {
             std::cerr << "rope convert-sw: " << e.what() << "\n";
             return 1;

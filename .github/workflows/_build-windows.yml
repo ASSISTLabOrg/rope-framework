@@ -62,6 +62,19 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # vcpkg manifest mode (vcpkg.json) provides cpp-httplib+OpenSSL for rope_net.
+      - name: Restore cached vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-archives-windows-${{ hashFiles('vcpkg.json') }}
+
+      - name: Bootstrap vcpkg
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          Add-Content $env:GITHUB_ENV "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg"
+
       - name: Restore cached deps
         uses: actions/cache/restore@v4
         with:

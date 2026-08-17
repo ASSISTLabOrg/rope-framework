@@ -243,6 +243,47 @@ std::pair<int, int> GridInterpolator<Grid>::bracket(TimePoint tp) const {
 }
 
 template <class Grid>
+double GridInterpolator<Grid>::spline_eval(const double* y, int n, int zi, double t,
+                                            double h) noexcept {
+    // Not-a-knot cubic spline: M[0] = 2M[1]-M[2], M[n-1] = 2M[n-2]-M[n-3].
+    // After substitution the (n-2) interior second-derivatives satisfy a tridiagonal
+    // system with diagonal {6,4,...,4,6} and off-diag {0,1,...,1,0}.
+    int N = n - 2;
+    double M[256] = {};
+    double rhs[256], cp[256];
+    double h2inv = 6.0 / (h * h);
+    for (int j = 0; j < N; ++j)
+        rhs[j] = h2inv * (y[j] - 2.0*y[j+1] + y[j+2]);
+
+    // Thomas forward sweep.
+    cp[0] = 0.0;
+    rhs[0] /= 6.0;
+    for (int j = 1; j < N; ++j) {
+        double a_j = (j == N - 1) ? 0.0 : 1.0;
+        double d_j = (j == 0 || j == N - 1) ? 6.0 : 4.0;
+        double c_j = (j < N - 1) ? 1.0 : 0.0;
+        double w   = d_j - a_j * cp[j-1];
+        cp[j]  = c_j / w;
+        rhs[j] = (rhs[j] - a_j * rhs[j-1]) / w;
+    }
+
+    // Back-substitute into M[1..n-2].
+    M[n-2] = rhs[N-1];
+    for (int j = N - 2; j >= 0; --j)
+        M[j+1] = rhs[j] - cp[j] * M[j+2];
+
+    // Not-a-knot boundary values.
+    M[0]   = 2.0*M[1]   - M[2];
+    M[n-1] = 2.0*M[n-2] - M[n-3];
+
+    // Evaluate the cubic on interval [zi, zi+1].
+    double dx  = t * h;
+    double Mi  = M[zi], Mi1 = M[zi+1];
+    double b   = (y[zi+1] - y[zi]) / h - h * (2.0*Mi + Mi1) / 6.0;
+    return y[zi] + b*dx + 0.5*Mi*dx*dx + (Mi1 - Mi) * dx*dx*dx / (6.0*h);
+}
+
+template <class Grid>
 int GridInterpolator<Grid>::lower_idx(const std::vector<double>& ax, double v) noexcept {
     auto it = std::lower_bound(ax.begin(), ax.end(), v);
     int i   = static_cast<int>(it - ax.begin());
@@ -250,7 +291,7 @@ int GridInterpolator<Grid>::lower_idx(const std::vector<double>& ax, double v) n
 }
 
 // ---------------------------------------------------------------------------
-// Trilinear interpolation in log10 space
+// Spatial interpolation in log10 space: bilinear LST/lat, cubic altitude
 // ---------------------------------------------------------------------------
 
 template <class Grid>
@@ -301,11 +342,10 @@ double GridInterpolator<Grid>::spatial_interp(const FieldView& f,
         return std::pow(10.0, lerp(c_a0, c_a1, wa));
     }
 
-    // --- Altitude: uniform ---
+    // --- Altitude: not-a-knot cubic spline through all altitude levels ---
     int zi0 = static_cast<int>((alt_km - alt_ax_.front()) / alt_step_);
     zi0 = std::max(0, std::min(zi0, n_alt - 2));
-    int    zi1 = zi0 + 1;
-    double wz  = (alt_km - alt_ax_[zi0]) / (alt_ax_[zi1] - alt_ax_[zi0]);
+    double wz  = (alt_km - alt_ax_[zi0]) / alt_step_;
 
     auto idx = [n_lat, n_alt](int l, int a, int z) -> std::size_t {
         return static_cast<std::size_t>(l) * (n_lat * n_alt)
@@ -321,13 +361,18 @@ double GridInterpolator<Grid>::spatial_interp(const FieldView& f,
         return (v > 0.0f) ? std::log10(static_cast<double>(v)) : -300.0;
     };
 
-    double c00 = lerp(logv(ai0,li0,zi0), logv(ai0,li1,zi0), wl);
-    double c01 = lerp(logv(ai0,li0,zi1), logv(ai0,li1,zi1), wl);
-    double c10 = lerp(logv(ai1,li0,zi0), logv(ai1,li1,zi0), wl);
-    double c11 = lerp(logv(ai1,li0,zi1), logv(ai1,li1,zi1), wl);
-    double c0  = lerp(c00, c10, wa);
-    double c1  = lerp(c01, c11, wa);
-    return std::pow(10.0, lerp(c0, c1, wz));
+    // Bilinear LST/lat blend at every altitude level, then spline along altitude.
+    double yy[256];
+    for (int z = 0; z < n_alt; ++z) {
+        double cl0 = lerp(logv(ai0,li0,z), logv(ai0,li1,z), wl);
+        double cl1 = lerp(logv(ai1,li0,z), logv(ai1,li1,z), wl);
+        yy[z] = lerp(cl0, cl1, wa);
+    }
+
+    if (n_alt < 4)
+        return std::pow(10.0, lerp(yy[zi0], yy[zi0 + 1], wz));
+
+    return std::pow(10.0, spline_eval(yy, n_alt, zi0, wz, alt_step_));
 }
 
 template <class Grid>

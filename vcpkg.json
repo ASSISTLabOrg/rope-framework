@@ -1,0 +1,11 @@
+{
+  "name": "rope-framework",
+  "version-string": "0.4.0",
+  "dependencies": [
+    {
+      "name": "cpp-httplib",
+      "default-features": false,
+      "features": ["openssl"]
+    }
+  ]
+}

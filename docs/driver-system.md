@@ -89,18 +89,18 @@ Manages a local cache of `.swbin` files refreshed from online sources. Integrate
 | `celestrak_sw` | `https://celestrak.org/SpaceData/SW-Last5Years.csv` |
 | `celestrak_sw_all` | `https://celestrak.org/SpaceData/SW-All.csv` |
 
-Each named source is specific to its own known raw-column shape (CelesTrak only ever produces `f10`/`kp`) — that's a property of the *source*, not an assumption baked into core infrastructure; a model with a different driver set simply can't use `drivers.source: "celestrak_sw"` and needs an explicit `driver_path`/`--driver` override instead (see below).
+Each named source is specific to its own known raw-column shape (CelesTrak always produces `f10`, `kp`, and `ap` together — both `tiegcm-aurora-v1` and `wam-borealis-v1`, the two models bundled with this framework, declare `drivers.source: "celestrak_sw"` but read different raw columns from it: the former wants `kp`, the latter `ap`) — that's a property of the *source*, not an assumption baked into core infrastructure; a model needing a raw column CelesTrak doesn't provide at all can't use `drivers.source: "celestrak_sw"` and needs an explicit `driver_path`/`--driver` override instead (see below).
 
 **`get_path(source)`** returns the path to a fresh `.swbin` file:
 1. If the cached file is absent or older than `max_age_hours` → calls `refresh(source, dest)`
-2. If refresh fails but a stale file exists → logs a warning and returns the stale file
+2. If refresh fails but a stale file exists → silently returns the stale file (no logging today — the caller can't distinguish "fresh" from "stale-fallback" without checking the file's mtime itself)
 3. If no file at all → throws
 
 **`refresh(source, dest)`:**
-1. `download(url)` — HTTP GET (not yet implemented; throws with a clear message pointing to `driver_path` as the workaround)
-2. `convert_and_write(raw_csv, dest)` — converts CelesTrak format to `.swbin` v2 (2 raw columns: `f10`, `kp`) using PCHIP interpolation
+1. `download(url)` — HTTP GET via `rope::net::IHttpClient` (`include/rope/net/http_client.h`); throws `std::runtime_error` on any transport or HTTP-level failure (DNS, TLS, timeout, non-2xx, empty body)
+2. `convert_and_write(raw_csv, dest)` — converts CelesTrak format to `.swbin` v2 (3 raw columns: `f10`, `kp`, `ap`) using PCHIP interpolation
 
-**Conversion stub** — the online conversion's HTTP fetch is stubbed until implemented. Use `driver_path` in `rope.conf`, or `--driver` on `rope forecast`, to point to a pre-converted `.swbin`/CSV as a workaround.
+**HTTP client** — `DriverCacheManager` takes a `std::unique_ptr<net::IHttpClient>` (constructor default: `net::make_http_client()`, the production cpp-httplib + OpenSSL implementation), so tests inject a fake and never touch the network. The production client verifies TLS against a CA store bundled into the binary at build time (`cmake/cacert.pem`, embedded via `cmake/cacert_pem.cpp.in`) rather than the host's own trust store — this is what makes the feature work identically on a bare-minimum Linux container with no `ca-certificates` package installed. `rope_net` (the target holding this implementation) is linked only into `rope_forecast`; it is not reachable from `capi` (see `capi-boundary.md`) or from the base test suite.
 
 **Data resolution priority** (in `StackedEnsemblePipeline::load_sw_db()`):
 ```
@@ -136,9 +136,13 @@ Records (nrows × (8 + 4*ncols) bytes):
 
 This serializes the same generic `raw_names_`/`raw_data_` representation `SpaceWeatherDB` already holds in memory — no fixed column set, and `t1`–`t4`/`doy`/`hour_int` are never stored (always derived or backfilled at load time, per `DriverRow::get()`). Clean break from v1 (pre-1.0; no dual-version support) — regenerate any existing `.swbin` via `rope convert-sw` from its source CSV.
 
-~17 MB for 736 K rows (1957–present, 2 raw columns), versus ~39 MB CSV. Convert via:
+`rope convert-sw --input <csv> --output <swbin>` auto-detects its input shape from the header line — no `--format` flag needed:
+- Header starts `DATE` → a raw, unconverted CelesTrak SW-*.csv (same shape `DriverCacheManager`'s live download path parses) → routed through `convert_celestrak_csv_to_swbin()` (`include/rope/io/driver_cache.h`), the same free function `DriverCacheManager::refresh()` uses, so a file saved by hand from `celestrak.org` converts identically to one fetched automatically.
+- Header starts `datetime` → already-canonical ROPE format (`datetime,f10,kp,...`) → routed through `SpaceWeatherDB`'s generic CSV constructor, as before.
+
+~21 MB for 736 K rows (1957–present, 3 raw columns), versus ~39 MB CSV. Convert via:
 ```
-rope convert-sw --input sw_celestrack_1957.csv --output sw_celestrack_1957.swbin
+rope convert-sw --input sw_celestrak_1957.csv --output sw_celestrak_1957.swbin
 ```
 
 ### `.icbin` — IC table binary (v2, self-describing)

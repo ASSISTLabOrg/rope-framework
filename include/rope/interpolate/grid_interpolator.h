@@ -1,6 +1,6 @@
 #pragma once
 // GridInterpolator — spatiotemporal density/uncertainty query on a ForecastGrid.
-// Grid axes are per-model (rope::GridSpec), not fixed constants. Spatial interpolation is trilinear in log10 space.
+// Grid axes are per-model (rope::GridSpec), not fixed constants. Spatial interpolation is in log10 space: bilinear in LST/lat, Catmull-Rom cubic in altitude.
 // HOLD: snap to next model hour. INTERP: trilinear at both bracket hours, then linear time blend.
 // Latitude beyond [lat_min_deg, lat_max_deg] blends toward a polar-cap average out to +/-90.
 // Altitude above alt_max_km optionally extrapolates log-linearly out to a hard ceiling; see ExtrapolationOptions.
@@ -118,6 +118,8 @@ private:
                                      double lst, double lat, double alt_km) const;
 
     static double lerp(double a, double b, double w) noexcept { return a + w*(b-a); }
+    // Not-a-knot cubic spline over n uniformly spaced values, evaluated at fractional position t in interval [zi, zi+1].
+    static double spline_eval(const double* y, int n, int zi, double t, double h) noexcept;
     static int    lower_idx(const std::vector<double>& ax, double v) noexcept;
 };
 

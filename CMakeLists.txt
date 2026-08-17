@@ -1,4 +1,11 @@
 cmake_minimum_required(VERSION 4.2)
+
+# vcpkg manifest mode: auto-activate from VCPKG_ROOT if no toolchain file was passed explicitly.
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        CACHE STRING "Vcpkg toolchain file")
+endif()
+
 project(ROPE VERSION 0.4.0 LANGUAGES CXX C)
 
 # CI version override: -DROPE_RELEASE_VERSION=x.y.z (not ROPE_VERSION, which project() hardcodes).
@@ -111,6 +118,11 @@ if(ROPE_USE_ZARR)
 endif()
 
 # ---------------------------------------------------------------------------
+# cpp-httplib + OpenSSL (vcpkg manifest mode) — DriverCacheManager's HTTPS client
+# ---------------------------------------------------------------------------
+find_package(httplib CONFIG REQUIRED)
+
+# ---------------------------------------------------------------------------
 # Compiler warnings and release optimisations
 # ---------------------------------------------------------------------------
 add_library(rope_compile_opts INTERFACE)
@@ -181,6 +193,30 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# rope_net — HTTPS client for DriverCacheManager (rope::net::IHttpClient impl)
+#
+# Deliberately its own target, not folded into rope_io: rope_io is linked into
+# the capi shared library (`rope`), which must stay free of the TLS/OpenSSL
+# dependency (capi-boundary.md) — only rope_forecast actually constructs a
+# DriverCacheManager without an injected fake, so only rope_forecast links this.
+# ---------------------------------------------------------------------------
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cacert.pem" ROPE_CACERT_PEM_CONTENT)
+configure_file(cmake/cacert_pem.cpp.in
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/cacert_pem.cpp" @ONLY)
+
+add_library(rope_net STATIC
+    src/net/http_client.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/cacert_pem.cpp"
+)
+target_include_directories(rope_net PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/net>
+)
+target_link_libraries(rope_net
+    PUBLIC  rope_core
+    PRIVATE httplib::httplib
+)
+
+# ---------------------------------------------------------------------------
 # rope_interpolate — in-memory grid interpolation
 # ---------------------------------------------------------------------------
 add_library(rope_interpolate STATIC
@@ -214,6 +250,7 @@ if(ORT_INC AND ORT_LIB)
         PUBLIC  rope_core
                 rope_io
         PRIVATE ${ORT_LIB}
+                rope_net
     )
     if(Torch_FOUND)
         target_link_libraries(rope_forecast PRIVATE ${TORCH_LIBRARIES})
@@ -356,11 +393,8 @@ if(ROPE_MODELS_DIR AND EXISTS "${ROPE_MODELS_DIR}")
     install(DIRECTORY "${ROPE_MODELS_DIR}/" DESTINATION data/models/tiegcm-aurora-v1)
 endif()
 
-# Space-weather binary (bundled historical data; driver_path override until CelesTrak conversion lands).
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data/drivers/sw_celestrack_1957.swbin")
-    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/drivers/sw_celestrack_1957.swbin"
-        DESTINATION data/drivers)
-endif()
+# Driver (space-weather) data is intentionally NOT bundled — downloaded separately (README.md)
+# or fetched automatically at forecast time by DriverCacheManager.
 
 # Python binding
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/python/" DESTINATION python)
