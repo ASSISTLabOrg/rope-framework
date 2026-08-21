@@ -32,6 +32,7 @@ private:
     // --- Scalars / config ---
     int  K_, S_, M_;
     bool compute_uncertainty_{true};
+    float uncert_scale_factor_{1.0f};
     GridSpec grid_shape_;
     std::string manifest_kind_;
 

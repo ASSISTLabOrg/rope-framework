@@ -94,11 +94,13 @@ Returns density and uncertainty at the requested position, interpolated from the
 | `--lst` | Local Solar Time, hours [0, 24) |
 | `--lat` | Geodetic latitude, degrees [-87.5, 87.5] |
 | `--alt` | Altitude, km [100, 980] |
+| `--no-extrapolate-altitude` | Disable log-linear extrapolation past the grid's `alt_max_km` |
+| `--n-etp-pts` | Altitude bins used to fit the extrapolation slope (`<=0` = use config/default) |
 
 Output is a JSON object on stdout:
 
 ```json
-{"density": 4.72e-12, "uncertainty": 3.5e-13}
+{"status": "ok", "density": 4.72e-12, "uncertainty": 3.5e-13}
 ```
 
 Density and uncertainty are in kg/m³.
@@ -168,6 +170,7 @@ r = Rope(
 
 - Constructor parameters are all optional; when omitted, `rope.py` resolves them relative to the directory one level above its own location (the archive root).
 - To override the decoder device (e.g. CPU ↔ GPU) without editing `rope.conf`, pass `device="cuda"` — the wrapper writes a temporary config with that setting for the forecast subprocess.
+- To change altitude extrapolation behavior at construction time, pass `extrapolate_altitude=False` and/or `n_etp_pts=<int>` — applied automatically on `open()`. Change it later on an already-open handle with `set_extrapolation()`.
 
 ### Example
 
@@ -176,17 +179,20 @@ from rope import Rope, ROPE_INTERP, ROPE_HOLD
 
 r = Rope()
 
-# 1. Run a forecast (writes the cache file).
+# 1. Inspect the model (driver columns, grid shape, validation status).
+r.print_model()
+
+# 2. Run a forecast (writes the cache file).
 result = r.forecast("2024-06-01 00:00:00", horizon=24)
 print(result["window_start"], "→", result["window_end"])
 
-# 2. Query a single point.
+# 3. Query a single point.
 #    The 'with' block opens an interpolation handle on entry and closes it on exit.
 with r:
     pt = r.get(time="2024-06-01T07:00:00Z", lst=12.5, lat=45.0, alt_km=400.0)
     print(pt)  # {'density': 4.72e-12, 'uncertainty': 3.5e-13}
 
-# 3. Query many points at once.
+# 4. Query many points at once.
 with r:
     pts = r.get_batch(
         times=["2024-06-01T07:00:00Z", "2024-06-01T08:00:00Z"],
@@ -198,12 +204,12 @@ with r:
     for p in pts:
         print(p["density"], p["uncertainty"])
 
-# 4. Tight-loop use: get_density() returns a bare float with no dict allocation.
+# 5. Tight-loop use: get_density() returns a bare float with no dict allocation.
 with r:
     for t in my_timestamps:
         rho = r.get_density(t, lst=0.0, lat=0.0, alt_km=400.0)
 
-# 5. Release the handle when done (unmaps the cache file).
+# 6. Release the handle when done (unmaps the cache file).
 r.shutdown()
 ```
 
@@ -221,11 +227,12 @@ The `with` block calls `open()` on entry and `close()` on exit. `shutdown()` is 
 
 | Member | Description |
 |--------|-------------|
-| `Rope(lib_path, exe_path, cache_path, config_path, device)` | Constructor — all parameters optional |
+| `Rope(lib_path, exe_path, cache_path, config_path, device, extrapolate_altitude, n_etp_pts)` | Constructor — all parameters optional |
 | `forecast(start, horizon, drivers=None)` → `dict` | Run a forecast; returns `{"status", "window_start", "window_end"}`. `drivers` supplies driver data inline for this call only, overriding `paths.driver_path`/`manifest.drivers.source` |
 | `open()` | Memory-map the cached grid and open an interpolation handle |
 | `close()` | Release the handle (unmaps the cache file) |
 | `refresh()` | Re-map the cache file after a new forecast |
+| `set_extrapolation(extrapolate_altitude, n_etp_pts)` | Reconfigure altitude extrapolation on the open handle; opens one first if needed |
 | `get(time, lst, lat, alt_km, mode)` → `dict` | Single-point query; returns `{"density", "uncertainty"}` in kg/m³ |
 | `get_density(time, lst, lat, alt_km, mode)` → `float` | Single-point density only; faster for tight loops |
 | `get_batch(times, lsts, lats, alts_km, mode)` → `list[dict]` | N-point query; returns list of `{"density", "uncertainty"}` |
@@ -247,8 +254,7 @@ The C API handles interpolation only — it memory-maps the cache file written b
 ### Functions
 
 ```c
-/* Open a handle onto the forecast-grid cache file (memory-mapped).
- * Returns NULL on failure; err_buf is filled with the reason. */
+/* Open a handle onto the forecast-grid cache file (memory-mapped); returns NULL on failure with err_buf filled. */
 rope_interp_t* rope_open(const char* cache_path, char* err_buf, int err_len);
 
 /* Query a single point. Returns ROPE_OK (0) on success. */
@@ -257,18 +263,21 @@ int rope_query(rope_interp_t* interp, int mode,
                double* density, double* uncertainty,
                char* err_buf, int err_len);
 
-/* Query N points in one call. Fills density[] and uncertainty[]. */
+/* Query N points in one call. Fills density[] and uncertainty[]; stops at the first failing point. */
 int rope_query_batch(rope_interp_t* interp, int mode, int n,
                      const double* times_unix, const double* lst,
                      const double* lat, const double* alt_km,
                      double* density, double* uncertainty,
                      char* err_buf, int err_len);
 
+/* Reconfigures altitude extrapolation on an open handle (n_etp_pts<=0 leaves it unchanged); not safe to call concurrently with rope_query/rope_query_batch on the same handle. */
+int rope_set_extrapolation(rope_interp_t* interp, int extrapolate_altitude, int n_etp_pts,
+                           char* err_buf, int err_len);
+
 /* Release the handle (unmaps the cache file). Safe to call with NULL. */
 void rope_close(rope_interp_t* interp);
 
-/* Writes a JSON summary of the model manifest into buf (kind, latent_dim, grid,
- * validated, ic, drivers) without needing an open handle or a cached forecast. */
+/* Writes a JSON manifest summary (kind, latent_dim, grid, validated, ic, drivers) into buf; no open handle or cached forecast needed. */
 int rope_get_manifest_info(const char* exported_dir, char* buf, int buf_len,
                            char* err_buf, int err_len);
 ```
@@ -293,7 +302,6 @@ int rope_get_manifest_info(const char* exported_dir, char* buf, int buf_len,
 ```c
 #include "rope/capi/rope.h"
 #include <stdio.h>
-#include <time.h>
 
 int main(void) {
     char err[256];
@@ -373,6 +381,9 @@ var r = new Rope(
     configPath: "config/rope.conf"
 );
 
+// Inspect the model (driver columns, grid shape, validation status).
+r.PrintModel();
+
 // Run a forecast (writes the cache file).
 var forecast = r.Forecast("2024-06-01 00:00:00", horizon: 24);
 Console.WriteLine($"Window: {forecast.WindowStart} → {forecast.WindowEnd}");
@@ -404,13 +415,14 @@ r.Dispose();
 
 | Member | Description |
 |--------|-------------|
-| `Rope(libPath, exePath, cachePath, configPath)` | Constructor — all parameters optional; defaults derived from package layout |
+| `Rope(libPath, exePath, cachePath, configPath, extrapolateAltitude, nEtpPts)` | Constructor — all parameters optional; defaults derived from package layout |
 | `Forecast(string start, int horizon)` | Run a forecast; returns `ForecastResult` with `WindowStart` / `WindowEnd` |
 | `Forecast(DateTime start, int horizon)` | DateTime overload |
 | `Forecast(..., IDictionary<string,object[]> drivers)` | Overload (string or DateTime start) that supplies driver data inline for this call only, overriding `paths.driver_path`/`manifest.drivers.source` |
 | `Open()` | Memory-map the cached grid and open an interpolation handle |
 | `Close()` | Release the handle (unmaps the cache file) |
 | `Refresh()` | Re-map the cache file after a new forecast |
+| `SetExtrapolation(extrapolateAltitude, nEtpPts)` | Reconfigure altitude extrapolation on the open handle; opens one first if needed |
 | `Get(double timeUnix, ...)` | Single-point query; returns `QueryResult` with `Density` and `Uncertainty` |
 | `Get(DateTime time, ...)` | DateTime overload |
 | `GetBatch(double[] timesUnix, ...)` | Batch query; returns `QueryResult[]` |

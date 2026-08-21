@@ -525,3 +525,90 @@ TEST_CASE("ModelManifest: out-of-order decoder stages are sorted on load") {
     CHECK(stages[0].alt_start == 0);
     CHECK(stages[1].alt_start == 22);
 }
+
+// -------------------------------------------------------------------
+// uncert_scale_factor (top-level, kind-agnostic)
+// -------------------------------------------------------------------
+TEST_CASE("ModelManifest: uncert_scale_factor defaults to 1.0 when absent") {
+    auto dir = write_manifest(VALID_3BM, "rope_mtest_uncert_default");
+    auto m = ModelManifest::load(dir);
+    CHECK(m.uncert_scale_factor == 1.0);
+}
+
+TEST_CASE("ModelManifest: explicit uncert_scale_factor parses") {
+    write_manifest(R"({
+      "schema_version": 1, "kind": "stacked_ensemble",
+      "runtime_requirements": {"onnxruntime":"1.25"},
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
+      "validated": false, "uncert_scale_factor": 1.5,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [
+          {"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}
+        ] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
+    })", "rope_mtest_uncert_explicit");
+    auto m = ModelManifest::load(fs::temp_directory_path() / "rope_mtest_uncert_explicit");
+    CHECK(m.uncert_scale_factor == 1.5);
+}
+
+TEST_CASE("ModelManifest: zero uncert_scale_factor throws") {
+    write_manifest(R"({
+      "schema_version": 1, "kind": "stacked_ensemble",
+      "runtime_requirements": {"onnxruntime":"1.25"},
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
+      "validated": false, "uncert_scale_factor": 0,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [
+          {"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}
+        ] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
+    })", "rope_mtest_uncert_zero");
+    REQUIRE_THROWS_AS(
+        ModelManifest::load(fs::temp_directory_path() / "rope_mtest_uncert_zero"),
+        std::runtime_error
+    );
+}
+
+TEST_CASE("ModelManifest: negative uncert_scale_factor throws") {
+    write_manifest(R"({
+      "schema_version": 1, "kind": "stacked_ensemble",
+      "runtime_requirements": {"onnxruntime":"1.25"},
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
+      "validated": false, "uncert_scale_factor": -2.0,
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [
+          {"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}
+        ] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
+    })", "rope_mtest_uncert_negative");
+    REQUIRE_THROWS_AS(
+        ModelManifest::load(fs::temp_directory_path() / "rope_mtest_uncert_negative"),
+        std::runtime_error
+    );
+}
+
+TEST_CASE("ModelManifest: non-numeric uncert_scale_factor throws") {
+    write_manifest(R"({
+      "schema_version": 1, "kind": "stacked_ensemble",
+      "runtime_requirements": {"onnxruntime":"1.25"},
+      "latent_dim": 10, "drivers": {"source": "s", "columns": [{"name": "f10", "description": "d"}]},
+      "validated": false, "uncert_scale_factor": "1.5",
+      "grid": {"n_lst":72,"n_lat":36,"n_alt":45,"lat_min_deg":-87.5,"lat_max_deg":87.5,"alt_min_km":100.0,"alt_max_km":980.0},
+      "ic": {"kind":"ic_lookup_table","params":{"grid_axes":["f10","kp"],"file":"ic_table.icbin"}},
+      "decoder": { "kind": "coae", "params": { "decode_batch_size": 120, "stages": [
+          {"backends":{"onnx":"d.onnx"},"stats":"s.bin","alt_start":0,"alt_end":45}
+        ] } },
+      "stacked_ensemble": {"seq_len":3,"base_models":[{"file":"a.onnx","backend":"onnx","architecture":"lstm","inter_op_threads":1}],
+        "meta_model":{"file":"m.onnx","backend":"onnx"}}
+    })", "rope_mtest_uncert_badtype");
+    REQUIRE_THROWS_AS(
+        ModelManifest::load(fs::temp_directory_path() / "rope_mtest_uncert_badtype"),
+        std::runtime_error
+    );
+}

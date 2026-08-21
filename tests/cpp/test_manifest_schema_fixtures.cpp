@@ -52,3 +52,15 @@ TEST_CASE("ModelManifest::load agrees with rope-registry: invalid_envelope_missi
 TEST_CASE("ModelManifest::load intentionally does not validate ic.kind membership (deferred to make_ic_source)") {
     CHECK_NOTHROW(ModelManifest::load(copy_fixture_to_tempdir("invalid_ic_bad_kind.json")));
 }
+
+TEST_CASE("ModelManifest::load agrees with rope-registry: valid_manifest_uncert_scale.json") {
+    auto m = ModelManifest::load(copy_fixture_to_tempdir("valid_manifest_uncert_scale.json"));
+    CHECK(m.uncert_scale_factor == 1.15);
+}
+
+TEST_CASE("ModelManifest::load agrees with rope-registry: invalid_envelope_bad_uncert_scale.json throws") {
+    CHECK_THROWS_AS(
+        ModelManifest::load(copy_fixture_to_tempdir("invalid_envelope_bad_uncert_scale.json")),
+        std::runtime_error
+    );
+}

@@ -66,6 +66,9 @@ struct ModelManifest {
     // Required — every model declares the grid it was trained/exported on.
     GridSpec grid;
 
+    // manifest.uncert_scale_factor; multiplies physical-unit uncertainty at pipeline end regardless of kind; optional, default 1.0, must be > 0.
+    double uncert_scale_factor = 1.0;
+
     // manifest.ic.kind. Not validated here — see forecast::make_ic_source().
     std::string ic_kind;
 

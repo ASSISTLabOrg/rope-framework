@@ -140,6 +140,17 @@ ModelManifest ModelManifest::load(const std::filesystem::path& exported_dir) {
                 "ModelManifest::load: 'grid.alt_min_km' must be < 'grid.alt_max_km' in " + ps);
     }
 
+    // uncert_scale_factor (lenient — defaults to 1.0 if absent).
+    if (j.contains("uncert_scale_factor")) {
+        if (!j["uncert_scale_factor"].is_number())
+            throw std::runtime_error(
+                "ModelManifest::load: 'uncert_scale_factor' must be a number in " + ps);
+        m.uncert_scale_factor = j["uncert_scale_factor"].get<double>();
+        if (!(m.uncert_scale_factor > 0.0))
+            throw std::runtime_error(
+                "ModelManifest::load: 'uncert_scale_factor' must be positive in " + ps);
+    }
+
     // ic
     if (!j.contains("ic") || !j["ic"].is_object())
         throw std::runtime_error(missing_field("ic", ps));

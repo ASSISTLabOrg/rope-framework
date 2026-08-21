@@ -72,6 +72,7 @@ StackedEnsemblePipeline::StackedEnsemblePipeline(
     S_            = spec.seq_len;
     M_            = static_cast<int>(spec.base_models.size());
     compute_uncertainty_ = cfg.compute_uncertainty;
+    uncert_scale_factor_ = static_cast<float>(manifest.uncert_scale_factor);
     driver_cols_         = manifest.driver_columns;
     driver_source_       = manifest.driver_source;
     grid_shape_          = manifest.grid;
@@ -371,7 +372,7 @@ void StackedEnsemblePipeline::run_streaming(
                     }
                 }
             for (float& u : uncertainty)
-                u = std::sqrt(std::max(u, 0.0f));
+                u = std::sqrt(std::max(u, 0.0f)) * uncert_scale_factor_;
 
             sink(t_lat,
                  std::span(times).subspan(static_cast<std::size_t>(t_lat),
