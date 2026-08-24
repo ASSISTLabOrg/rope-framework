@@ -374,6 +374,16 @@ if(Torch_FOUND)
     endif()
 endif()
 
+# Bundle vcpkg runtime DLLs (OpenSSL, pulled in dynamically on x64-windows by cpp-httplib for rope_net)
+if(WIN32 AND VCPKG_TARGET_TRIPLET)
+    set(_vcpkg_bin_dir "${CMAKE_CURRENT_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin")
+    if(EXISTS "${_vcpkg_bin_dir}")
+        install(DIRECTORY "${_vcpkg_bin_dir}/"
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+            FILES_MATCHING PATTERN "*.dll")
+    endif()
+endif()
+
 # Model artifacts
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data/models/tiegcm-aurora-v1")
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/models/tiegcm-aurora-v1/" DESTINATION data/models/tiegcm-aurora-v1)

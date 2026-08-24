@@ -146,11 +146,14 @@ jobs:
 
           dotnet build tests/dotnet/PackSmokeConsumer/PackSmokeConsumer.csproj -c Release --no-restore
 
+          # libcrypto/libssl are OpenSSL, pulled in dynamically by cpp-httplib for rope_net (driver-cache HTTPS client).
           foreach ($tfm in @("net48", "net8.0")) {
-            $dllPath = "tests/dotnet/PackSmokeConsumer/bin/Release/$tfm/librope.dll"
-            if (!(Test-Path $dllPath)) {
-              Write-Error "librope.dll missing from $tfm build output — packaging regression"
-              exit 1
+            $outDir = "tests/dotnet/PackSmokeConsumer/bin/Release/$tfm"
+            foreach ($f in @("librope.dll", "rope.exe", "libcrypto-3-x64.dll", "libssl-3-x64.dll")) {
+              if (!(Test-Path (Join-Path $outDir $f))) {
+                Write-Error "$f missing from $tfm build output — packaging regression"
+                exit 1
+              }
             }
           }
 

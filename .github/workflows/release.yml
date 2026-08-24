@@ -81,6 +81,8 @@ jobs:
     name: Pack .NET (NuGet)
     needs: [build-linux, build-windows, build-macos-arm64]
     runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -114,6 +116,7 @@ jobs:
           ls native/
 
       - name: Pack
+        id: pack
         run: |
           VERSION_FLAG=""
           if [ "${{ github.ref_type }}" = "tag" ]; then
@@ -121,6 +124,7 @@ jobs:
           fi
           dotnet pack dotnet/Rope.csproj -c Release -o nupkg \
             -p:RopeNativeDir="${{ github.workspace }}/native" $VERSION_FLAG
+          echo "version=$(basename nupkg/RopeFramework.*.nupkg .nupkg | sed 's/^RopeFramework\.//')" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -128,9 +132,60 @@ jobs:
           path: nupkg/*.nupkg
           retention-days: 1
 
+  smoke-test-dotnet:
+    name: Smoke test .NET package (Windows)
+    needs: pack-dotnet
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: rope-dotnet-nupkg
+          path: nupkg
+
+      # Consumes the actual packed release nupkg exactly like a real NuGet user would —
+      # catches native-file bundling regressions (e.g. missing OpenSSL DLLs) that only
+      # show up in the real cpack-produced archive, not in a fresh local `cmake --install`.
+      - name: Consume packed nupkg
+        run: |
+          @"
+          [paths]
+          exported_dir = $env:GITHUB_WORKSPACE\tests\fixtures\test_models
+          driver_path  = $env:GITHUB_WORKSPACE\tests\fixtures\test_models\sw_test.swbin
+          [server]
+          idle_timeout_seconds = 30
+          "@ | Out-File -FilePath "$env:RUNNER_TEMP\release-smoke-rope.conf" -Encoding utf8
+
+          dotnet restore tests/dotnet/PackSmokeConsumer/PackSmokeConsumer.csproj `
+            -p:RopeSmokeTestVersion="${{ needs.pack-dotnet.outputs.version }}" `
+            "-p:RestoreAdditionalProjectSources=$env:GITHUB_WORKSPACE\nupkg"
+
+          dotnet build tests/dotnet/PackSmokeConsumer/PackSmokeConsumer.csproj -c Release --no-restore
+
+          # libcrypto/libssl are OpenSSL, pulled in dynamically by cpp-httplib for rope_net (driver-cache HTTPS client).
+          foreach ($tfm in @("net48", "net8.0")) {
+            $outDir = "tests/dotnet/PackSmokeConsumer/bin/Release/$tfm"
+            foreach ($f in @("librope.dll", "rope.exe", "libcrypto-3-x64.dll", "libssl-3-x64.dll")) {
+              if (!(Test-Path (Join-Path $outDir $f))) {
+                Write-Error "$f missing from $tfm build output — packaging regression"
+                exit 1
+              }
+            }
+          }
+
+          dotnet tests/dotnet/PackSmokeConsumer/bin/Release/net8.0/PackSmokeConsumer.dll "$env:RUNNER_TEMP\release-smoke-rope.conf"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+          tests/dotnet/PackSmokeConsumer/bin/Release/net48/PackSmokeConsumer.exe "$env:RUNNER_TEMP\release-smoke-rope.conf"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
   publish:
     name: Publish GitHub Release
-    needs: [build-linux, build-linux-cuda12, build-macos-arm64, build-windows, build-windows-cuda12, pack-dotnet]
+    needs: [build-linux, build-linux-cuda12, build-macos-arm64, build-windows, build-windows-cuda12, pack-dotnet, smoke-test-dotnet]
     runs-on: ubuntu-latest
     permissions:
       contents: write
